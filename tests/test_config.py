@@ -25,10 +25,12 @@ class TestGlobalConfig:
         assert c.check_interval == 300
         assert "decomposer" in c.role_models
         assert "anthropic" in c.role_backends.values()
+        assert c.plan_only is True
 
     def test_load_missing_file(self, tmp_path: Path):
         c = load_global_config(tmp_path / "nonexistent.yaml")
         assert c.model == "claude-opus-4-6"
+        assert c.plan_only is True
 
     def test_load_from_file(self, tmp_path: Path):
         config_path = tmp_path / "config.yaml"
@@ -101,6 +103,11 @@ class TestResolveBackend:
         pc = ProjectConfig(role_backends={"decomposer": "claude_code"})
         gc = GlobalConfig()
         assert resolve_backend("decomposer", pc, gc) == "claude_code"
+
+    def test_project_override_to_codex_code(self):
+        pc = ProjectConfig(role_backends={"code_author": "codex_code"})
+        gc = GlobalConfig()
+        assert resolve_backend("code_author", pc, gc) == "codex_code"
 
     def test_global_role(self):
         pc = ProjectConfig()

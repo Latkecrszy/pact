@@ -211,7 +211,7 @@ class TestParallelConfig:
         assert gc.competitive_implementations is False
         assert gc.competitive_agents == 2
         assert gc.max_concurrent_agents == 4
-        assert gc.plan_only is False
+        assert gc.plan_only is True
 
     def test_project_defaults(self):
         pc = ProjectConfig()
@@ -911,6 +911,24 @@ class TestBackendFactory:
         budget = BudgetTracker()
         backend = create_backend("claude_code_team", budget, "claude-opus-4-6")
         assert isinstance(backend, ClaudeCodeBackend)
+
+    def test_codex_code_backend_factory(self):
+        """codex_code creates the Codex CLI backend."""
+        from pact.backends import create_backend
+        from pact.backends.codex_code import CodexCodeBackend
+        from pact.budget import BudgetTracker
+
+        backend = create_backend("codex_code", BudgetTracker(), "gpt-5.2")
+        assert isinstance(backend, CodexCodeBackend)
+
+    def test_codex_code_backend_ignores_claude_default_model(self):
+        from pact.backends import create_backend
+        from pact.backends.codex_code import CodexCodeBackend
+        from pact.budget import BudgetTracker
+
+        backend = create_backend("codex_code", BudgetTracker(), "claude-opus-4-6")
+        assert isinstance(backend, CodexCodeBackend)
+        assert backend._model == ""
 
     def test_unknown_backend_raises(self):
         from pact.backends import create_backend

@@ -13,6 +13,7 @@ Commands:
   pact answer <project-dir>            Answer interview questions
   pact approve <project-dir>           Approve interview + signal daemon to continue
   pact validate <project-dir>          Re-run contract validation gate
+  pact review <target>                 Run Advocate + Simulacrum review
   pact design <project-dir>            Regenerate design.md
   pact components <project-dir>        List all components with status
   pact build <project-dir> <id>        Rebuild a specific component
@@ -76,6 +77,17 @@ def main() -> None:
     p_run.add_argument("--constrain-dir", default="", help="Constrain output directory")
     p_run.add_argument("--ledger-dir", default="", help="Ledger assertion exports directory")
     p_run.add_argument("--skip-arbiter", action="store_true", help="Skip Arbiter gate phase")
+    run_mode = p_run.add_mutually_exclusive_group()
+    run_mode.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Force plan-only for this invocation, overriding project config",
+    )
+    run_mode.add_argument(
+        "--implement",
+        action="store_true",
+        help="Continue through Pact-managed implementation and integration",
+    )
     p_run.add_argument(
         "--workers", default=None,
         help=(
@@ -90,6 +102,17 @@ def main() -> None:
     p_daemon = subparsers.add_parser("daemon", help="Run event-driven daemon (recommended)")
     p_daemon.add_argument("project_dir", help="Project directory path")
     p_daemon.add_argument("--force-new", action="store_true", help="Clear state and start fresh")
+    daemon_mode = p_daemon.add_mutually_exclusive_group()
+    daemon_mode.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Force plan-only for this invocation, overriding project config",
+    )
+    daemon_mode.add_argument(
+        "--implement",
+        action="store_true",
+        help="Continue through Pact-managed implementation and integration",
+    )
     p_daemon.add_argument(
         "--health-interval", type=int, default=30,
         help="Seconds between health checks when waiting (default: 30)",
@@ -286,6 +309,26 @@ def main() -> None:
     p_handoff.add_argument("--max-tokens", type=int, default=0, help="Apply tiered compression (0=no limit)")
     p_handoff.add_argument("--json", action="store_true", dest="json_output", help="Output validation results as JSON")
 
+    # review
+    p_review = subparsers.add_parser(
+        "review",
+        help="Run Advocate and Simulacrum review tools",
+    )
+    p_review.add_argument("target", nargs="?", default=".", help="File or directory for Advocate review")
+    p_review.add_argument("--claim", default="", help="Architecture or done claim to stress-test with Simulacrum")
+    p_review.add_argument(
+        "--provider",
+        default="",
+        choices=["anthropic", "openai", "gemini"],
+        help="Advocate provider (default: auto-detect standard credentials)",
+    )
+    p_review.add_argument("--output-dir", default="", help="Directory for review artifacts")
+    p_review.add_argument("--timeout", type=int, default=600, help="Per-tool timeout in seconds")
+    review_mode = p_review.add_mutually_exclusive_group()
+    review_mode.add_argument("--advocate-only", action="store_true", help="Run only Advocate")
+    review_mode.add_argument("--sim-only", action="store_true", help="Run only Simulacrum")
+    p_review.add_argument("--json", action="store_true", dest="json_output", help="Print the report as JSON")
+
     # wizard
     p_wizard = subparsers.add_parser("wizard", help="Guided project setup wizard")
     p_wizard.add_argument("project_dir", help="Project directory path")
@@ -415,6 +458,8 @@ def main() -> None:
         cmd_pricing(args)
     elif args.command == "handoff":
         cmd_handoff(args)
+    elif args.command == "review":
+        cmd_review(args)
     elif args.command == "wizard":
         cmd_wizard(args)
     elif args.command == "ci":
@@ -854,6 +899,24 @@ def _kindex_publish_project(project_dir: str) -> None:
     kindex.close()
 
 
+def _apply_run_overrides(
+    project_config: object,
+    args: argparse.Namespace,
+) -> object:
+    """Apply invocation-only run flags without rewriting pact.yaml."""
+    if getattr(args, "constrain_dir", ""):
+        project_config.constrain_dir = args.constrain_dir
+    if getattr(args, "ledger_dir", ""):
+        project_config.ledger_dir = args.ledger_dir
+    if getattr(args, "skip_arbiter", False):
+        project_config.skip_arbiter = True
+    if getattr(args, "implement", False):
+        project_config.plan_only = False
+    elif getattr(args, "plan_only", False):
+        project_config.plan_only = True
+    return project_config
+
+
 async def cmd_run(args: argparse.Namespace) -> None:
     """Run the pipeline (poll-based, legacy)."""
     from pact.budget import BudgetTracker
@@ -862,6 +925,7 @@ async def cmd_run(args: argparse.Namespace) -> None:
     project = ProjectManager(args.project_dir)
     global_config = load_global_config()
     project_config = load_project_config(args.project_dir)
+    _apply_run_overrides(project_config, args)
 
     if args.force_new:
         project.clear_state()
@@ -901,6 +965,7 @@ async def cmd_daemon(args: argparse.Namespace) -> None:
     project = ProjectManager(args.project_dir)
     global_config = load_global_config()
     project_config = load_project_config(args.project_dir)
+    _apply_run_overrides(project_config, args)
 
     if args.force_new:
         project.clear_state()
@@ -2466,6 +2531,27 @@ def cmd_handoff(args: argparse.Namespace) -> None:
             print(brief)
     else:
         print(brief)
+
+
+def cmd_review(args: argparse.Namespace) -> None:
+    """Run Advocate and Simulacrum and persist their reports."""
+    from pact.review import render_review_summary, run_reviews
+
+    report = run_reviews(
+        args.target,
+        claim=args.claim,
+        output_dir=args.output_dir or None,
+        run_advocate=not args.sim_only,
+        run_simulacrum=not args.advocate_only,
+        advocate_provider=args.provider,
+        timeout=args.timeout,
+    )
+    if args.json_output:
+        print(json.dumps(report, indent=2))
+    else:
+        print(render_review_summary(report))
+    if not report["ok"]:
+        raise SystemExit(1)
 
 
 def cmd_health(args: argparse.Namespace) -> None:

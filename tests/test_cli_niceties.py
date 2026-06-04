@@ -24,6 +24,41 @@ from pact.schemas import (
 )
 
 
+class TestRunOverrides:
+    def test_run_overrides_enable_full_implementation(self):
+        import argparse
+
+        from pact.cli import _apply_run_overrides
+
+        config = ProjectConfig()
+        args = argparse.Namespace(
+            constrain_dir="/tmp/constrain",
+            ledger_dir="/tmp/ledger",
+            skip_arbiter=True,
+            plan_only=False,
+            implement=True,
+        )
+
+        _apply_run_overrides(config, args)
+
+        assert config.constrain_dir == "/tmp/constrain"
+        assert config.ledger_dir == "/tmp/ledger"
+        assert config.skip_arbiter is True
+        assert config.plan_only is False
+
+    def test_run_overrides_can_reassert_plan_only(self):
+        import argparse
+
+        from pact.cli import _apply_run_overrides
+
+        config = ProjectConfig(plan_only=False)
+        args = argparse.Namespace(plan_only=True, implement=False)
+
+        _apply_run_overrides(config, args)
+
+        assert config.plan_only is True
+
+
 def _make_tree() -> DecompositionTree:
     """Create a simple test tree: root -> [child_a, child_b]."""
     return DecompositionTree(

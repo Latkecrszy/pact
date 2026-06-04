@@ -18,6 +18,7 @@ pact checklist <project-dir>       # Requirements quality checklist
 pact assess <directory>            # Architectural assessment (any codebase)
 pact export-tasks <project-dir>    # Export TASKS.md
 pact handoff <project-dir> <id>    # Render/validate handoff brief
+pact review <target> --claim <text> # Advocate + Simulacrum review
 pact directive <project-dir> <json> # Send structured directive to daemon
 pact mcp-server [--project-dir <dir>] # Run MCP server (stdio)
 pact-mcp                              # MCP server entry point
@@ -41,7 +42,7 @@ Every agent follows 3 phases: Research -> Plan+Evaluate -> Execute. Research and
 3. **Contract** -- For each component (leaves first), generate ComponentContract
 4. **Test** -- For each contract, generate ContractTestSuite with executable tests + hidden Goodhart tests
 5. **Validate** -- Mechanical gate: all refs resolve, no cycles, test code parses
-6. **Preflight** -- Establish red lines and contingencies before implementation (Claude Code backend only). Queries Kindex for lessons from previous runs. Stores PreflightPlan per component in `.pact/preflight/`. Skipped for direct API backends.
+6. **Preflight** -- Establish red lines and contingencies before implementation (iterative coding-shell backends). Queries Kindex for lessons from previous runs. Stores PreflightPlan per component in `.pact/preflight/`. Skipped for direct API backends.
 7. **Implement** -- Each component independently by code_author agent, verified by contract tests
 8. **Integrate** -- Parent components: glue code wiring children, parent-level tests
 9. **Retrospective** -- Post-run analysis: cost, failure patterns, lessons learned (mechanical, no LLM)
@@ -52,8 +53,12 @@ Every agent follows 3 phases: Research -> Plan+Evaluate -> Execute. Research and
 Two independent levers:
 - `parallel_components: true` -- Independent leaves implement concurrently (semaphore-limited)
 - `competitive_implementations: true` -- N agents implement same component, best wins
-- `plan_only: true` -- Stop after contracts, use `pact build` to target specific nodes
+- `plan_only: true` -- Default. Stop after contracts/tests so the active Claude or Codex agent can implement
 - `max_concurrent_agents: 4` -- Concurrency limit for parallel modes
+
+Use `pact run <project> --implement` to opt into Pact-managed implementation.
+If implementation exposes an infeasible contract, reconcile and regenerate the
+Pact artifacts rather than silently deviating.
 
 ### Build Modes
 
@@ -207,6 +212,8 @@ src/pact/
     anthropic.py       # Direct API backend
     claude_code.py     # Claude Code CLI backend (validated token tracking)
     claude_code_team.py # Tmux-based full Claude Code agent sessions (budget-aware)
+    codex_code.py      # Codex CLI backend
+    agent_runtime.py   # Shared Claude/Codex execution envelope
 
   human/
     __init__.py        # Human integration facade
@@ -326,7 +333,7 @@ pact incident <project-dir> <id>      # Show incident details + diagnostic repor
 ## Testing
 
 ```bash
-make test          # 2073 tests, ~30s
+make test          # full suite, ~30s
 make test-quick    # Stop on first failure
 ```
 
@@ -356,3 +363,11 @@ kin add "<insight>"               # Capture discoveries
 ```
 
 Legacy Conv vault (459 nodes, richer historical data): `~/Personal/Projects/Conv/`
+
+## Cross-Agent Engineering Skill
+
+`skills/pact-engineer/SKILL.md` packages the plan-first workflow for Claude and
+Codex: Pact planning, active-agent implementation, contract reconciliation,
+Advocate review, Simulacrum validation, Kindex capture, and the done gate.
+`skills/simulacrum/SKILL.md` exposes Pact's packaged Simulacrum without relying
+on a user-specific home-directory installation.

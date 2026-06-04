@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pact Engineer"
+  short_description: "Plan-first contract engineering with Pact"
+  default_prompt: "Use $pact-engineer to plan with Pact, implement with the active agent, reconcile contracts, and run adversarial review."

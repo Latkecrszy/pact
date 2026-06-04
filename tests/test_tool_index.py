@@ -204,9 +204,8 @@ class TestTreeSitter:
         assert symbols == []
 
     def test_tree_sitter_unsupported_language(self, tmp_path):
-        (tmp_path / "main.rs").write_text("fn main() {}\n")
-        # Rust grammar not installed, should return empty
-        symbols = run_tree_sitter(tmp_path, "rust")
+        (tmp_path / "main.unknown").write_text("fn main() {}\n")
+        symbols = run_tree_sitter(tmp_path, "definitely_not_supported")
         assert symbols == []
 
     def test_tree_sitter_multiline_function(self, tmp_path):

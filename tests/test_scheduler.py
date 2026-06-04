@@ -174,6 +174,19 @@ class TestSchedulerBackendRouting:
         backend = resolve_backend("code_author", pc, gc)
         assert backend == "claude_code_team"
 
+    def test_codex_code_detected_as_iterative(self):
+        """codex_code backend should trigger the iterative path."""
+        from pact.backends.agent_runtime import is_iterative_backend
+
+        gc = GlobalConfig(role_backends={
+            **GlobalConfig().role_backends,
+            "code_author": "codex_code",
+        })
+        pc = ProjectConfig()
+        backend = resolve_backend("code_author", pc, gc)
+        assert backend == "codex_code"
+        assert is_iterative_backend(backend)
+
     def test_iterative_imports_available(self):
         """Verify the iterative implementation functions are importable from scheduler."""
         from pact.scheduler import implement_all_iterative, implement_component_iterative

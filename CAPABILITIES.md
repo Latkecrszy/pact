@@ -8,6 +8,7 @@ For human-readable docs, see [README.md](README.md). For full technical referenc
 **I want to...** | **Use**
 --- | ---
 Build a multi-component project from scratch | `pact init` + `pact run`
+Run full Pact-managed implementation | `pact run <project> --implement`
 Adopt an existing codebase under contracts | `pact adopt`
 Analyze architecture for friction before building | `pact assess`
 Check contract/test consistency after decomposition | `pact analyze`
@@ -16,16 +17,17 @@ Generate tests for untested code | `pact test-gen`
 Build one specific component | `pact build <project> <id>`
 Monitor coordination health | `pact health`
 Integrate with Claude Code | `pact mcp-server`
+Run adversarial implementation + claim review | `pact review`
 
 ## Capabilities
 
 ### 1. Pipeline Orchestration
 
-**Command:** `pact run <project-dir> [--once] [--plan-only]`
-**When:** You have a task.md describing what to build and want the full pipeline.
-**Requires:** LLM backend (Anthropic, OpenAI, Gemini, Claude Code).
+**Command:** `pact run <project-dir> [--once] [--plan-only|--implement]`
+**When:** You have a task.md describing what to build and want contracts/tests or the full pipeline.
+**Requires:** LLM backend (Anthropic, OpenAI, Gemini, Claude Code, Codex).
 **Phases:** Interview -> Shape -> Decompose -> Contract -> Test -> Validate -> Implement -> Integrate -> Polish -> Diagnose.
-**Output:** Fully implemented, tested components in `src/<cid>/`.
+**Output:** By default, decomposition/contracts/tests and a plan-only pause. With `--implement`, fully implemented and tested components in `src/<cid>/`.
 **Cost:** $5-50 depending on complexity and model.
 
 ### 2. Architectural Assessment
@@ -108,6 +110,14 @@ Integrate with Claude Code | `pact mcp-server`
 **Output:** Phased task list (setup -> foundational -> component -> integration -> polish).
 **Cost:** Free. Mechanical.
 
+### 11. Adversarial Review
+
+**Command:** `pact review <target> --claim "<architecture or done claim>"`
+**When:** After implementation or before locking a consequential architecture frame.
+**Requires:** Advocate for implementation review; `pact-agents[review]` plus an Anthropic key for Pact's packaged Simulacrum.
+**Output:** Persisted Advocate JSON, Simulacrum response, command logs, and `review.json` under `.pact/reviews/`.
+**Cost:** Depends on the configured Advocate and Simulacrum providers.
+
 ## Integration Points
 
 | System | Direction | Mechanism |
@@ -117,6 +127,12 @@ Integrate with Claude Code | `pact mcp-server`
 | Ledger | Upstream | `--ledger-dir` loads field-level audit assertions |
 | Sentinel | Downstream | PACT log keys for production attribution |
 | Kindex | Bidirectional | Knowledge graph context for agents + post-run capture |
+| Advocate | Downstream gate | Multi-persona implementation review via `pact review` |
+| Simulacrum | Packaged downstream gate | Architecture and done-claim stress test via `pact review`; external command only by explicit override |
+
+All agent roles can use `codex_code`; when no Codex-specific model is set,
+Pact inherits the installed Codex default and supports strict-schema plus
+free-form JSON structured responses.
 
 ## Language Support
 

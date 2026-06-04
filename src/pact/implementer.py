@@ -24,6 +24,7 @@ from pathlib import Path
 
 from pact.agents.base import AgentBase
 from pact.agents.code_author import author_code
+from pact.backends.agent_runtime import provider_for_backend, session_id_for_project
 from pact.interface_stub import get_required_exports
 from pact.project import ProjectManager
 from pact.resolution import ScoredAttempt, format_resolution_summary, select_winner
@@ -748,11 +749,12 @@ async def implement_component_iterative(
     timeout: int = 600,
     standards_brief: str = "",
     prior_test_results: TestResults | None = None,
+    backend_name: str = "claude_code",
 ) -> TestResults:
-    """Implement a component using iterative Claude Code (write -> test -> fix).
+    """Implement a component using an iterative coding shell (write -> test -> fix).
 
     Instead of the API-based research->plan->code pipeline with blind retries,
-    gives Claude Code full tool access to write code, run tests, read errors,
+    gives a coding CLI full tool access to write code, run tests, read errors,
     and iterate within a single session. This is how a human developer works.
 
     Args:
@@ -773,7 +775,6 @@ async def implement_component_iterative(
         TestResults from running contract tests after implementation.
     """
     from pact.interface_stub import render_handoff_brief
-    from pact.backends.claude_code import ClaudeCodeBackend
 
     language = project.language
     is_ts = language == "typescript"
@@ -872,14 +873,33 @@ Rules:
 - Also check task.md and any test_harness.py in the project root — your solution must pass those too
 {prior_context}"""
 
-    logger.info("Implementing %s iteratively via Claude Code (%s)", component_id, model)
-
-    backend = ClaudeCodeBackend(
-        budget=budget,
-        model=model,
-        repo_path=project.project_dir,
-        timeout=timeout,
+    provider = provider_for_backend(backend_name)
+    session_id = session_id_for_project(project)
+    logger.info(
+        "Implementing %s iteratively via %s (%s)",
+        component_id,
+        provider,
+        model,
     )
+
+    if provider == "codex":
+        from pact.backends.codex_code import CodexCodeBackend
+        backend = CodexCodeBackend(
+            budget=budget,
+            model=model,
+            repo_path=project.project_dir,
+            timeout=timeout,
+            session_id=session_id,
+        )
+    else:
+        from pact.backends.claude_code import ClaudeCodeBackend
+        backend = ClaudeCodeBackend(
+            budget=budget,
+            model=model,
+            repo_path=project.project_dir,
+            timeout=timeout,
+            session_id=session_id,
+        )
 
     try:
         await backend.implement(
@@ -913,13 +933,14 @@ Rules:
     project.save_impl_metadata(component_id, {
         "attempt": 1,
         "timestamp": datetime.now().isoformat(),
-        "method": "iterative_claude_code",
+        "method": f"iterative_{backend_name}",
         "model": model,
+        "session_id": session_id,
     })
 
     project.append_audit(
         "implementation",
-        f"{component_id} iterative claude_code ({model})",
+        f"{component_id} iterative {backend_name} ({model})",
     )
 
     # Run contract tests for official results
@@ -1258,10 +1279,11 @@ async def implement_all_iterative(
     learnings: str = "",
     max_turns: int = 30,
     timeout: int = 600,
+    backend_name: str = "claude_code",
 ) -> dict[str, TestResults]:
-    """Implement all leaf components using iterative Claude Code sessions.
+    """Implement all leaf components using iterative coding-agent sessions.
 
-    Each component gets its own Claude Code session with full tool access
+    Each component gets its own coding-agent session with full tool access
     that can write code, run tests, read errors, and fix — iteratively.
 
     Args:
@@ -1320,6 +1342,7 @@ async def implement_all_iterative(
             learnings=learnings,
             max_turns=max_turns,
             timeout=timeout,
+            backend_name=backend_name,
         )
         return component_id, test_results
 

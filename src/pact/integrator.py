@@ -14,6 +14,7 @@ import logging
 from collections.abc import Callable
 
 from pact.agents.base import AgentBase
+from pact.backends.agent_runtime import provider_for_backend, session_id_for_project
 from pact.project import ProjectManager
 from pact.schemas import (
     ComponentContract,
@@ -325,18 +326,17 @@ async def integrate_component_iterative(
     learnings: str = "",
     max_turns: int = 30,
     timeout: int = 600,
+    backend_name: str = "claude_code",
 ) -> TestResults:
-    """Integrate child components via iterative Claude Code (write glue -> test -> fix).
+    """Integrate child components via an iterative coding shell.
 
-    Instead of asking the API to produce a JSON blob of glue code, gives Claude Code
+    Instead of asking the API to produce a JSON blob of glue code, gives a CLI agent
     full tool access to read child implementations, write glue code, run parent tests,
     read errors, and iterate within a single session.
 
     Returns:
         TestResults from running parent-level tests.
     """
-    from pact.backends.claude_code import ClaudeCodeBackend
-
     language = project.language
     is_ts = language == "typescript"
     is_js = language == "javascript"
@@ -508,14 +508,32 @@ Do NOT use sys.path manipulation. Just import children by their module name.
 {f'Learnings: {learnings}' if learnings else ''}
 """
 
-    logger.info("Integrating %s iteratively via Claude Code (%s)", parent_id, model)
-
-    backend = ClaudeCodeBackend(
-        budget=budget,
-        model=model,
-        repo_path=project.project_dir,
-        timeout=timeout,
+    provider = provider_for_backend(backend_name)
+    session_id = session_id_for_project(project)
+    logger.info(
+        "Integrating %s iteratively via %s (%s)",
+        parent_id,
+        provider,
+        model,
     )
+    if provider == "codex":
+        from pact.backends.codex_code import CodexCodeBackend
+        backend = CodexCodeBackend(
+            budget=budget,
+            model=model,
+            repo_path=project.project_dir,
+            timeout=timeout,
+            session_id=session_id,
+        )
+    else:
+        from pact.backends.claude_code import ClaudeCodeBackend
+        backend = ClaudeCodeBackend(
+            budget=budget,
+            model=model,
+            repo_path=project.project_dir,
+            timeout=timeout,
+            session_id=session_id,
+        )
 
     try:
         await backend.implement(
@@ -529,7 +547,7 @@ Do NOT use sys.path manipulation. Just import children by their module name.
 
     project.append_audit(
         "integration",
-        f"{parent_id} iterative claude_code ({model})",
+        f"{parent_id} iterative {backend_name} ({model})",
     )
 
     # Run parent tests for official results — include child src/ dirs
@@ -572,8 +590,9 @@ async def integrate_all_iterative(
     learnings: str = "",
     max_turns: int = 30,
     timeout: int = 600,
+    backend_name: str = "claude_code",
 ) -> dict[str, TestResults]:
-    """Integrate all non-leaf components via iterative Claude Code, deepest first.
+    """Integrate all non-leaf components via an iterative coding shell.
 
     Returns:
         Dict of parent_id -> TestResults.
@@ -622,6 +641,7 @@ async def integrate_all_iterative(
             learnings=learnings,
             max_turns=max_turns,
             timeout=timeout,
+            backend_name=backend_name,
         )
 
         node.implementation_status = (

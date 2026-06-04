@@ -69,7 +69,7 @@ class GlobalConfig:
     competitive_implementations: bool = False
     competitive_agents: int = 2
     max_concurrent_agents: int = 4
-    plan_only: bool = False
+    plan_only: bool = True
 
     # Per-million-token pricing: {"model_id": [input_cost, output_cost]}
     model_pricing: dict[str, list[float]] = field(default_factory=dict)
@@ -230,7 +230,7 @@ def load_global_config(config_path: str | Path | None = None) -> GlobalConfig:
         competitive_implementations=raw.get("competitive_implementations", False),
         competitive_agents=raw.get("competitive_agents", 2),
         max_concurrent_agents=raw.get("max_concurrent_agents", 4),
-        plan_only=raw.get("plan_only", False),
+        plan_only=raw.get("plan_only", GlobalConfig.plan_only),
         model_pricing=raw.get("model_pricing", {}),
         slack_webhook=raw.get("slack_webhook", ""),
         linear_api_key=raw.get("linear_api_key", ""),

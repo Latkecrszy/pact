@@ -57,8 +57,15 @@ def create_backend(
         # Return a claude_code backend as the fallback for structured calls.
         from pact.backends.claude_code import ClaudeCodeBackend
         return ClaudeCodeBackend(budget=budget, model=model, repo_path=repo_path)
+    elif name == "codex_code":
+        from pact.backends.codex_code import CodexCodeBackend
+        return CodexCodeBackend(budget=budget, model=model, repo_path=repo_path)
+    elif name == "codex_code_team":
+        from pact.backends.codex_code import CodexCodeBackend
+        return CodexCodeBackend(budget=budget, model=model, repo_path=repo_path)
     else:
         raise ValueError(
             f"Unknown backend: {name}. "
-            f"Available: anthropic, openai, gemini, claude_code, claude_code_team"
+            f"Available: anthropic, openai, gemini, claude_code, "
+            f"claude_code_team, codex_code, codex_code_team"
         )

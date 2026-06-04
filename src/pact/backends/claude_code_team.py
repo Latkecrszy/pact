@@ -25,6 +25,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from pact.backends.agent_runtime import (
+    build_tmux_agent_command,
+    build_tmux_launch_command,
+    wrap_worker_prompt,
+)
+
 if TYPE_CHECKING:
     from pact.budget import BudgetTracker
 
@@ -40,6 +46,8 @@ class AgentTask:
     working_dir: str = ""
     model: str = "claude-opus-4-6"
     max_turns: int = 0  # 0 = unlimited
+    provider: str = "claude"
+    session_id: str = ""
 
 
 @dataclass
@@ -137,38 +145,32 @@ class ClaudeCodeTeamBackend:
                 f"First, read the shared project context at {self.preamble_path}\n\n"
                 + prompt_text
             )
+        prompt_text = wrap_worker_prompt(prompt_text, task.session_id)
 
         # Write prompt to file
         prompt_file = self._prompt_dir / f"{task.pane_name}_{uuid4().hex[:6]}.md"
         await asyncio.to_thread(prompt_file.write_text, prompt_text)
 
-        # Build the claude command
-        # The agent reads its prompt, does its work, and writes output
+        # Build the provider command. The agent reads its prompt, does its
+        # work, and writes output.
         output_path = task.output_file
-        model_flag = f"--model {task.model}" if task.model else ""
-        max_turns_flag = f"--max-turns {task.max_turns}" if task.max_turns > 0 else ""
 
-        # Remove CLAUDECODE env var to allow spawning from within Claude Code
-        env_unset = "unset CLAUDECODE; "
-
-        # The command: run claude with the prompt, capture to output file
-        cmd = (
-            f'{env_unset}'
-            f'claude -p "$(cat {prompt_file})" '
-            f'{model_flag} {max_turns_flag} '
-            f'--output-format json '
-            f'> {output_path} 2>&1; '
-            f'echo "__CF_AGENT_DONE__" >> {output_path}'
+        worker_cmd = build_tmux_agent_command(
+            provider=task.provider,
+            prompt_file=prompt_file,
+            output_file=output_path,
+            model=task.model,
+            max_turns=task.max_turns,
         )
-
         cwd = task.working_dir or self._repo_path or str(Path.cwd())
+        cmd = build_tmux_launch_command(worker_cmd, cwd, task.session_id)
 
         # Create new tmux window and run command
         proc = await asyncio.create_subprocess_exec(
             "tmux", "new-window", "-t", self._session,
             "-n", task.pane_name,
             "-d",  # don't switch to it
-            f"cd {cwd} && {cmd}",
+            cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

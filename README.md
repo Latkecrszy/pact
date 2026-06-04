@@ -4,6 +4,10 @@
 
 Pact is a multi-agent software engineering framework where the architecture is decided before a single line of implementation is written. Tasks are decomposed into components, each component gets a typed interface contract, and each contract gets executable tests. Only then do agents implement -- independently, in parallel, even competitively -- with no way to ship code that doesn't honor its contract. Generates Python, TypeScript, or JavaScript.
 
+> **Breaking change in v1:** `pact run` now stops after decomposition,
+> contracts, and tests by default. Existing automation that expects Pact to
+> implement must add `--implement`.
+
 The insight: LLMs are unreliable reviewers but tests are perfectly reliable judges. So make the tests first, make them mechanical, and let agents iterate until they pass. No advisory coordination. No "looks good to me." Pass or fail.
 
 ## When to Use Pact
@@ -59,8 +63,21 @@ That's it. Now try:
 pact init my-project
 # Edit my-project/task.md with your task
 # Edit my-project/sops.md with your standards
-pact --help
+pact run my-project
 ```
+
+Pact defaults to **plan-only**: it produces the decomposition, contracts, and
+tests, then pauses for the active Claude or Codex agent to implement. Use
+`pact run my-project --implement` when Pact should also own implementation and
+integration.
+
+**v1 migration:** `pact run` no longer implements by default. Existing
+automation that expects a full build must add `--implement`.
+
+For a complete plan-first agent workflow, load the cross-agent skill at
+`skills/pact-engineer/SKILL.md`. The repository is also a Claude Code plugin:
+`claude --plugin-dir ./pact`. The plugin includes the Pact engineering workflow
+and a Simulacrum skill; Codex can invoke the same review path through Pact.
 
 ## How It Works
 
@@ -220,7 +237,8 @@ Either, neither, or both. Defaults: both off (sequential, single-attempt).
 | Command | Purpose |
 |---------|---------|
 | `pact init <project>` | Scaffold a new project |
-| `pact run <project>` | Run the pipeline |
+| `pact run <project>` | Run through contracts/tests, then pause (default) |
+| `pact run <project> --implement` | Run the full Pact-managed pipeline |
 | `pact daemon <project>` | Event-driven mode (recommended) |
 | `pact status <project>` | Show project or component status |
 | `pact components <project>` | List components with status |
@@ -236,11 +254,15 @@ Either, neither, or both. Defaults: both off (sequential, single-attempt).
 | `pact health <project>` | Show health metrics and proposed remedies |
 | `pact tasks <project>` | List phase tasks with status |
 | `pact handoff <project> <id>` | Render/validate handoff brief |
+| `pact review <target> --claim <text>` | Run Advocate + Simulacrum review |
+| `pact-sim <claim>` | Run Pact's packaged Simulacrum directly |
 | `pact adopt <project>` | Adopt existing codebase under pact governance |
 | `pact assess <directory>` | Architectural assessment — shallow modules, hub dependencies, coupling |
 | `pact mcp-server` | Run MCP server (stdio transport) |
 
-Run flags: `--constrain-dir`, `--ledger-dir`, `--skip-arbiter`.
+Run flags: `--constrain-dir`, `--ledger-dir`, `--skip-arbiter`, `--plan-only`,
+`--implement`. Use `--plan-only` to override a project configured for
+implementation on a single invocation.
 
 ## Monitoring the Daemon
 
@@ -310,6 +332,7 @@ STUCK_TIMEOUT=300 bash monitor-pact.sh . 15   # restart after 5 min of silence
 
 ```yaml
 budget: 25.00
+plan_only: true
 parallel_components: true
 competitive_implementations: true
 
@@ -346,10 +369,66 @@ role_models:
 
 role_backends:
   decomposer: anthropic
-  code_author: openai
+  code_author: codex_code
 ```
 
-Available backends: `anthropic`, `openai`, `gemini`, `claude_code`, `claude_code_team`.
+Available backends: `anthropic`, `openai`, `gemini`, `claude_code`,
+`claude_code_team`, `codex_code`, `codex_code_team`. When a Codex backend is
+selected without a Codex-specific model override, Pact inherits the model from
+the installed Codex configuration.
+
+For an entirely Codex-driven Pact planning run:
+
+```yaml
+role_backends:
+  decomposer: codex_code
+  contract_author: codex_code
+  test_author: codex_code
+  code_author: codex_code
+  trace_analyst: codex_code
+```
+
+No model override is required; `codex_code` uses the installed Codex default
+unless a Codex model is explicitly configured.
+
+## Agent Review Workflow
+
+`pact review` treats Advocate and Simulacrum as independent review tools and
+persists their output under `.pact/reviews/`:
+
+```bash
+pact review . --claim "This change is done because all contract tests pass."
+```
+
+Advocate reviews the implementation. Simulacrum stress-tests the architecture
+or done claim. Requested tool failures and Advocate critical/high findings make
+the command exit non-zero. Simulacrum completion is not machine-readable
+approval; the active agent must adjudicate its response, fix the work, and
+rerun the gate.
+
+Pact ships Simulacrum's MIT-licensed runtime and annotated corpus. It does not
+search user home directories for another installation. Install review support
+with `pip install 'pact-agents[review]'` and set `ANTHROPIC_API_KEY` or
+`PACT_REVIEW_ANTHROPIC_API_KEY`. `PACT_SIMULACRUM_CMD` is an explicit override
+for operators developing or replacing the packaged runtime. The packaged
+runtime is also available directly as `pact-sim "<claim>"`. Provider calls use
+the local operator's credentials directly; Pact does not proxy calls, share a
+publisher key, or route them through Jeremy's infrastructure.
+
+Review recovery is explicit:
+
+- `unavailable` means install the named optional tool or rerun with
+  `--advocate-only` / `--sim-only`.
+- `failed` with credential/setup guidance means repair the local toolchain.
+- `failed` with Advocate blockers means fix or explicitly adjudicate findings.
+- Simulacrum `completed` means read and adjudicate `simulacrum.md`; it is not
+  approval.
+
+Advocate auto-selects a provider from standard `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, or Gemini credentials. Override it with `--provider` or
+`PACT_ADVOCATE_PROVIDER`. Per-process key aliases are available as
+`PACT_REVIEW_ANTHROPIC_API_KEY` and `PACT_REVIEW_OPENAI_API_KEY`; Pact does not
+mutate caller exports.
 
 ## Project Structure
 
@@ -374,7 +453,8 @@ pip install pact-agents[mcp]
 pact-mcp
 ```
 
-7 tools for Claude Code integration: status, contracts, budget, validate, resume.
+MCP tools work with Claude Code and other stdio MCP-compatible clients:
+status, contracts, budget, validate, and resume.
 
 ## Codebase Analysis (Tool Index)
 

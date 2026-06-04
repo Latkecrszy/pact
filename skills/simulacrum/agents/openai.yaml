@@ -1,0 +1,4 @@
+interface:
+  display_name: "Simulacrum"
+  short_description: "Stress-test claims with rigorous pushback"
+  default_prompt: "Use $simulacrum to stress-test this claim before I commit to it."

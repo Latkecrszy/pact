@@ -36,6 +36,7 @@ from pact.config import (
     resolve_model,
     resolve_parallel_config,
 )
+from pact.backends.agent_runtime import is_iterative_backend, submit_preflight_plan
 from pact.decomposer import decompose_and_contract, run_interview
 from pact.diagnoser import determine_recovery_action, diagnose_failure
 from pact.events import EventBus, PactEvent
@@ -777,7 +778,8 @@ class Scheduler:
                     state.pause(
                         "Plan-only mode: decomposition and contracts complete. "
                         "Use 'pact build <project> <component_id>' to implement "
-                        "specific components, or disable plan_only to implement all."
+                        "specific components, or rerun with '--implement' to "
+                        "let Pact implement all."
                     )
                 else:
                     advance_phase(state)  # -> contract
@@ -820,10 +822,10 @@ class Scheduler:
     async def _phase_preflight(self, state: RunState) -> RunState:
         """Preflight phase — establish red lines and contingencies before implementation.
 
-        Only activates when the backend is claude_code or claude_code_team.
+        Only activates when the backend is an iterative coding shell.
         Direct API backends (anthropic, openai, gemini) skip this phase because
-        signet-eval only runs as a Claude Code hook — there's nothing to enforce
-        the plan against when calling the API directly.
+        the permission tool only gates coding-shell tool calls -- there is nothing
+        to enforce the plan against when calling the API directly.
 
         For each component about to be implemented:
         1. Read the contract (what we're building)
@@ -833,13 +835,13 @@ class Scheduler:
         5. Establish contingencies (plan Bs for known failure modes)
         6. Submit the PreflightPlan via signet_preflight_submit MCP tool
 
-        Compliance mechanisms (enforced by signet-eval, not by Pact):
+        Compliance mechanisms (enforced by the permission tool, not by Pact):
         - Timed lockout: plan is immutable for a configurable duration after submission
         - HMAC signing: plan signed with vault session key, verified on every read
         - Escalation: 5+ violations triggers ASK-everything mode
         - Human override: preflight-override CLI requires vault passphrase
 
-        MCP tools (signet-eval):
+        MCP tools:
         - signet_preflight_submit: submit the plan (starts lockout)
         - signet_preflight_active: read the active plan
         - signet_preflight_history: past preflights for this component
@@ -855,14 +857,14 @@ class Scheduler:
             RedLine,
         )
 
-        # Only activate for claude_code backends
-        backend = self.project_config.backend
-        role_backends = self.project_config.role_backends
-        implementer_backend = role_backends.get("implementer", backend)
+        # Only activate for coding-shell backends.
+        implementer_backend = resolve_backend(
+            "code_author", self.project_config, self.global_config,
+        )
 
-        if implementer_backend not in ("claude_code", "claude_code_team"):
+        if not is_iterative_backend(implementer_backend):
             logger.info(
-                "Preflight skipped — backend '%s' is not claude_code",
+                "Preflight skipped — backend '%s' is not an iterative shell",
                 implementer_backend,
             )
             advance_phase(state)
@@ -984,7 +986,7 @@ class Scheduler:
             )
             plans.append(plan)
 
-            # Submit plan via signet_preflight_submit if available,
+            # Submit plan via the permission tool if available,
             # fall back to local file storage.  The MCP submission
             # starts the timed lockout and HMAC-signs the plan.
             preflight_dir = self.project.project_dir / ".pact" / "preflight"
@@ -993,16 +995,13 @@ class Scheduler:
             plan_path.write_text(plan.model_dump_json(indent=2))
 
             try:
-                import subprocess as _sp
-                _sp.run(
-                    ["claude", "mcp", "call", "signet_preflight_submit",
-                     "--", plan.model_dump_json()],
-                    capture_output=True, text=True, timeout=10,
-                )
-                logger.info("Preflight submitted via signet for %s", cid)
+                if submit_preflight_plan(plan.model_dump_json()):
+                    logger.info("Preflight submitted for %s", cid)
+                else:
+                    logger.debug("Preflight submit command returned non-zero for %s", cid)
             except Exception:
                 logger.debug(
-                    "signet_preflight_submit not available — plan saved locally for %s",
+                    "Preflight submit unavailable — plan saved locally for %s",
                     cid,
                 )
 
@@ -1070,10 +1069,10 @@ class Scheduler:
             "code_author", self.project_config, self.global_config,
         )
 
-        if code_author_backend in ("claude_code", "claude_code_team"):
+        if is_iterative_backend(code_author_backend):
             # Iterative path: Claude Code writes, tests, fixes in a loop
             logger.info(
-                "Using iterative Claude Code implementation (%s, %s)",
+                "Using iterative coding shell implementation (%s, %s)",
                 code_author_backend, code_author_model,
             )
             results = await implement_all_iterative(
@@ -1088,6 +1087,7 @@ class Scheduler:
                 external_context=external_context,
                 learnings=learnings,
                 timeout=self.global_config.autonomous_timeout or 1800,
+                backend_name=code_author_backend,
             )
         else:
             # API-based path: structured extraction with blind retries
@@ -1241,7 +1241,7 @@ class Scheduler:
             "code_author", self.project_config, self.global_config,
         )
 
-        if code_author_backend in ("claude_code", "claude_code_team"):
+        if is_iterative_backend(code_author_backend):
             results = await integrate_all_iterative(
                 project=self.project,
                 tree=tree,
@@ -1252,6 +1252,7 @@ class Scheduler:
                 max_concurrent=pcfg.max_concurrent,
                 external_context=external_context,
                 learnings=learnings,
+                backend_name=code_author_backend,
             )
         else:
             agent = self._make_agent("code_author")
@@ -1699,7 +1700,7 @@ class Scheduler:
                 )
 
                 try:
-                    if code_author_backend in ("claude_code", "claude_code_team"):
+                    if is_iterative_backend(code_author_backend):
                         await implement_component_iterative(
                             project=self.project,
                             component_id=cid,
@@ -1710,6 +1711,7 @@ class Scheduler:
                             dependency_contracts=dep_contracts or None,
                             sops=sops,
                             learnings=hint,
+                            backend_name=code_author_backend,
                         )
                     else:
                         from pact.implementer import implement_component
@@ -1822,10 +1824,10 @@ class Scheduler:
             "code_author", self.project_config, self.global_config,
         )
 
-        if code_author_backend in ("claude_code", "claude_code_team") and not competitive:
+        if is_iterative_backend(code_author_backend) and not competitive:
             # Iterative path: Claude Code writes, tests, fixes in a loop
             logger.info(
-                "Building %s iteratively via Claude Code (%s)",
+                "Building %s iteratively via coding shell (%s)",
                 component_id, code_author_model,
             )
             test_results = await implement_component_iterative(
@@ -1837,6 +1839,7 @@ class Scheduler:
                 model=code_author_model,
                 dependency_contracts=dep_contracts or None,
                 sops=sops,
+                backend_name=code_author_backend,
             )
         elif competitive:
             from pact.implementer import implement_component_competitive

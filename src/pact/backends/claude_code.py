@@ -8,13 +8,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 from pathlib import Path
 from typing import TypeVar
 
 from pydantic import BaseModel
 
+from pact.backends.agent_runtime import (
+    AgentRuntimeSpec,
+    build_claude_implement_command,
+    wrap_worker_prompt,
+)
 from pact.budget import BudgetExceeded, BudgetTracker
 
 T = TypeVar("T", bound=BaseModel)
@@ -32,12 +36,14 @@ class ClaudeCodeBackend:
         repo_path: Path | None = None,
         timeout: int = 300,
         max_retries: int = 2,
+        session_id: str = "",
     ) -> None:
         self._model = model
         self._budget = budget
         self._repo_path = Path(repo_path) if repo_path else None
         self._timeout = timeout  # seconds per CLI invocation
         self._max_retries = max_retries
+        self._session_id = session_id
 
     def set_model(self, model: str) -> None:
         self._model = model
@@ -99,15 +105,19 @@ class ClaudeCodeBackend:
         if self._repo_path and self._repo_path.exists():
             cmd.extend(["--allowedTools", "Read,Glob,Grep,Bash"])
 
-        # Remove CLAUDECODE env var to allow spawning from within Claude Code
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        spec = AgentRuntimeSpec(
+            provider="claude",
+            model=self._model,
+            working_dir=self._repo_path or Path.cwd(),
+            session_id=self._session_id,
+        )
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(self._repo_path) if self._repo_path else None,
-            env=env,
+            env=spec.env(),
         )
 
         try:
@@ -209,17 +219,17 @@ class ClaudeCodeBackend:
         Returns:
             (output_text, input_tokens, output_tokens)
         """
-        cmd = [
-            "claude", "-p",
-            "--output-format", "json",
-            "--model", self._model,
-            "--max-turns", str(max_turns),
-            "--allowedTools",
-            "Read,Write,Edit,Bash,Glob,Grep",
-        ]
+        spec = AgentRuntimeSpec(
+            provider="claude",
+            model=self._model,
+            working_dir=Path(working_dir or self._repo_path or Path.cwd()),
+            session_id=self._session_id,
+            max_turns=max_turns,
+        )
+        cmd = build_claude_implement_command(spec)
 
-        cwd = str(working_dir or self._repo_path or Path.cwd())
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        cwd = str(spec.working_dir)
+        prompt = wrap_worker_prompt(prompt, self._session_id)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -227,7 +237,7 @@ class ClaudeCodeBackend:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
-            env=env,
+            env=spec.env(),
         )
 
         try:

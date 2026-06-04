@@ -411,10 +411,13 @@
   <div class="container">
     <h1>Contracts before code.<br><span class="accent">Tests as law.</span></h1>
     <p class="subtitle">
-      A multi-agent software engineering framework where architecture is decided before
-      a single line of implementation is written. Agents implement independently,
-      in parallel, even competitively &mdash; with no way to ship code that doesn't
-      honor its contract.
+      A plan-first software engineering framework where architecture, contracts,
+      and tests are decided before implementation. Hand the plan to Claude or Codex,
+      or let Pact implement independently, in parallel, even competitively &mdash;
+      with no way to ship code that doesn't honor its contract.
+    </p>
+    <p style="color: var(--text-muted); margin: -20px auto 28px; max-width: 720px;">
+      v1 changes the default: existing automation that expects a full build must add <code>--implement</code>.
     </p>
     <pre style="display: inline-block; text-align: left; margin-bottom: 32px; padding: 16px 32px;"><code><span class="code-cmd">pip install</span> pact-agents</code></pre>
     <div class="cta-group">
@@ -459,8 +462,8 @@
 <section class="how-it-works" id="how-it-works">
   <div class="container">
     <div class="section-header">
-      <h2>Ten phases. All mechanical gates.</h2>
-      <p>No human judgment in the loop at verification time. The pipeline either passes or it doesn't.</p>
+      <h2>Plan first. Implement deliberately. Verify mechanically.</h2>
+      <p>Pact defaults to a contracts-and-tests handoff. Use <code>--implement</code> when Pact should own the remaining phases.</p>
     </div>
     <div class="pipeline">
       <div class="phase">
@@ -521,7 +524,7 @@
       <div class="feature-card">
         <span class="feature-icon">&#x1f50c;</span>
         <h3>Multi-Provider</h3>
-        <p>Route different roles to different LLMs. Opus for architecture, Sonnet for tests, GPT-4o for implementation. Anthropic, OpenAI, and Gemini supported.</p>
+        <p>Route different roles to different LLMs or coding agents. Anthropic, OpenAI, Gemini, Claude Code, and Codex are supported, including full iterative workspace sessions.</p>
       </div>
       <div class="feature-card">
         <span class="feature-icon">&#x1f4b0;</span>
@@ -530,8 +533,18 @@
       </div>
       <div class="feature-card">
         <span class="feature-icon">&#x1f4cb;</span>
-        <h3>Plan-Only Mode</h3>
-        <p>Stop after contracts and tests. Review the architecture. Then target specific components with <code>pact build</code>. Full control over what gets built and when.</p>
+        <h3>Plan-First by Default</h3>
+        <p>Stop after contracts and tests, then let the active Claude or Codex agent implement. Use <code>--implement</code> or <code>pact build</code> when Pact should own the code.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">&#x1f916;</span>
+        <h3>Claude + Codex Native</h3>
+        <p>Shared coding-agent envelopes preserve Kindex context, session identity, structured outputs, and contract reconciliation across Claude Code and Codex.</p>
+      </div>
+      <div class="feature-card">
+        <span class="feature-icon">&#x1f9ed;</span>
+        <h3>Adversarial Review Gate</h3>
+        <p><code>pact review</code> runs Advocate against the implementation and Pact's packaged Simulacrum against architecture and done claims, then persists auditable review artifacts.</p>
       </div>
       <div class="feature-card">
         <span class="feature-icon">&#x1f50d;</span>
@@ -606,7 +619,7 @@
       <div class="feature-card">
         <span class="feature-icon">&#x2728;</span>
         <h3>MCP Server</h3>
-        <p>Built-in MCP server for Claude Code integration. Inspect status, validate contracts, check budgets, and resume runs &mdash; all from your editor. 7 tools, 5 resources, stdio transport. <code>pip install pact-agents[mcp]</code></p>
+        <p>Built-in MCP server for Claude Code and other stdio MCP-compatible clients. Inspect status, validate contracts, check budgets, and resume runs from your agent. <code>pip install pact-agents[mcp]</code></p>
       </div>
       <div class="feature-card">
         <span class="feature-icon">&#x1f9ea;</span>
@@ -691,15 +704,17 @@
       <div>
         <h2>One piece of a larger stack</h2>
         <p>
-          Pact is the contract-first build system. It integrates with four companion tools &mdash;
-          all optional, all additive.
+          Pact is the contract-first build system. It integrates with companion
+          planning, review, memory, and deployment tools &mdash; all optional, all additive.
         </p>
         <p>
           <strong>Constrain</strong> seeds decomposition with policies and component maps.
           <strong>Arbiter</strong> gates deployments with blast radius analysis and trust scoring.
           <strong>Ledger</strong> injects field-level audit assertions into test suites.
           <strong>Sentinel</strong> watches production, attributes errors via PACT keys, and pushes
-          tightened contracts back.
+          tightened contracts back. <strong>Kindex</strong> carries durable agent context.
+          <strong>Advocate</strong> and the packaged <strong>Simulacrum</strong> stress-test
+          implementations and claims before the done gate.
         </p>
         <p>
           Every implementation emits structured events with classification metadata.
@@ -713,6 +728,7 @@
         <div class="step"><span class="arrow">&#9656;</span> <span>access_graph.json emitted</span></div>
         <div class="step"><span class="arrow">&#9656;</span> <span><span class="label">Arbiter</span> <span class="dim">// blast radius + trust gate</span></span></div>
         <div class="step"><span class="arrow">&#9656;</span> <span><span class="label">Ledger</span> <span class="dim">// field-level audit assertions</span></span></div>
+        <div class="step"><span class="arrow">&#9656;</span> <span><span class="label">Advocate + Simulacrum</span> <span class="dim">// implementation + claim review</span></span></div>
         <div class="step"><span class="arrow">&#9656;</span> <span>Certification artifact produced</span></div>
         <div class="step"><span class="arrow">&#9656;</span> <span><span class="label">Sentinel</span> <span class="dim">// production monitoring + contract tightening</span></span></div>
       </div>
@@ -731,7 +747,8 @@
         </p>
         <p>
           Describe your task in <code>task.md</code>, set your standards in <code>sops.md</code>,
-          and let Pact decompose, contract, and build.
+          and let Pact decompose, contract, and test. The active Claude or Codex agent
+          implements by default; add <code>--implement</code> for a Pact-managed build.
         </p>
         <p style="margin-top: 24px;">
           <a href="https://github.com/jmcentire/pact" class="btn btn-primary">View on GitHub</a>
@@ -747,16 +764,24 @@
 <span class="code-comment"># With code analysis tools (tree-sitter)</span>
 <span class="code-cmd">pip install</span> pact-agents<span class="code-flag">[analysis]</span>
 
+<span class="code-comment"># With packaged Simulacrum review support</span>
+<span class="code-cmd">pip install</span> pact-agents<span class="code-flag">[review]</span>
+
 <span class="code-comment"># Create a project</span>
 <span class="code-cmd">pact init</span> my-project
 <span class="code-comment"># Edit my-project/task.md with your task</span>
 <span class="code-comment"># Edit my-project/sops.md with your standards</span>
 
-<span class="code-comment"># Run the pipeline</span>
+<span class="code-comment"># Plan-first default: contracts + tests, then agent handoff</span>
 <span class="code-cmd">pact run</span> my-project
 
-<span class="code-comment"># Or go step by step</span>
-<span class="code-cmd">pact run</span> my-project <span class="code-flag">--plan-only</span>
+<span class="code-comment"># Opt into Pact-managed implementation</span>
+<span class="code-cmd">pact run</span> my-project <span class="code-flag">--implement</span>
+
+<span class="code-comment"># Review implementation and done claim</span>
+<span class="code-cmd">pact review</span> . <span class="code-flag">--claim</span> <span class="code-string">"All contract tests pass."</span>
+
+<span class="code-comment"># Or build a single component</span>
 <span class="code-cmd">pact components</span> my-project
 <span class="code-cmd">pact build</span> my-project auth_module</code></pre>
       </div>
