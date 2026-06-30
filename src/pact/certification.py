@@ -96,6 +96,12 @@ def verify_artifact_hashes(
         if actual != expected_hash:
             mismatches.append(f"tests/{cid}/goodhart/goodhart_test_suite.json: hash mismatch")
 
+    # Emission compliance tests
+    for cid, expected_hash in cert.emission_hashes.items():
+        actual = _hash_file(project.emission_test_path(cid))
+        if actual != expected_hash:
+            mismatches.append(f"tests/{cid}/emission_test: hash mismatch")
+
     return mismatches
 
 
@@ -121,7 +127,7 @@ async def certify(project: ProjectManager) -> CertificationArtifact:
         return cert
 
     cert.tree_hash = _hash_file(project.tree_path)
-    cert.components = [n.component_id for n in tree.nodes]
+    cert.components = [n.component_id for n in tree.nodes.values()]
 
     # Load contracts and compute hashes
     contracts = project.load_all_contracts()
@@ -139,6 +145,9 @@ async def certify(project: ProjectManager) -> CertificationArtifact:
     for cid in goodhart_suites:
         gh_json = project._visible_tests_dir / cid / "goodhart" / "goodhart_test_suite.json"
         cert.goodhart_hashes[cid] = _hash_file(gh_json)
+
+    for cid in contracts:
+        cert.emission_hashes[cid] = _hash_file(project.emission_test_path(cid))
 
     language = project.language
 
@@ -194,13 +203,60 @@ async def certify(project: ProjectManager) -> CertificationArtifact:
             cert.goodhart_results[cid] = {"total": 0, "passed": 0, "failed": 1, "error": str(e)}
             all_goodhart_pass = False
 
+    # Run emission compliance tests. These are required for every contracted
+    # component: a missing emission test means the PACT-key invariant was not
+    # checked, so certification must fail closed rather than silently pass.
+    all_emission_pass = True
+    for cid in contracts:
+        test_file = project.emission_test_path(cid)
+        impl_dir = project.impl_src_dir(cid)
+        if not test_file.exists():
+            cert.emission_results[cid] = {
+                "total": 0,
+                "passed": 0,
+                "failed": 1,
+                "missing_test": True,
+                "error": "Missing emission compliance test",
+            }
+            all_emission_pass = False
+            continue
+        if not impl_dir.exists():
+            cert.emission_results[cid] = {
+                "total": 0,
+                "passed": 0,
+                "failed": 1,
+                "missing_implementation": True,
+                "error": "Missing implementation directory",
+            }
+            all_emission_pass = False
+            continue
+        try:
+            results = await run_contract_tests(
+                test_file, impl_dir, language=language,
+                project_dir=project.project_dir,
+            )
+            cert.emission_results[cid] = {
+                "total": results.total,
+                "passed": results.passed,
+                "failed": results.failed,
+            }
+            if not results.all_passed:
+                all_emission_pass = False
+        except Exception as e:
+            logger.error("Emission compliance test error for %s: %s", cid, e)
+            cert.emission_results[cid] = {"total": 0, "passed": 0, "failed": 1, "error": str(e)}
+            all_emission_pass = False
+
     # Determine verdict
-    if all_visible_pass and all_goodhart_pass:
+    if all_visible_pass and all_goodhart_pass and all_emission_pass:
         cert.verdict = "pass"
-        cert.summary = "All visible and Goodhart tests pass"
-    elif all_visible_pass:
+        cert.summary = "All visible, Goodhart, and emission compliance tests pass"
+    elif all_visible_pass and all_emission_pass:
         cert.verdict = "partial"
-        cert.summary = "Visible tests pass but Goodhart tests have failures"
+        cert.summary = "Visible and emission compliance tests pass but Goodhart tests have failures"
+    elif not all_emission_pass:
+        cert.verdict = "fail"
+        cert.summary = "Emission compliance test failures detected"
     else:
         cert.verdict = "fail"
         cert.summary = "Test failures detected"

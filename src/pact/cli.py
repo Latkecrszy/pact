@@ -2965,6 +2965,11 @@ async def cmd_certify(args: argparse.Namespace) -> None:
             total_gt = sum(r.get("total", 0) for r in cert.goodhart_results.values())
             print(f"  Goodhart tests: {total_g}/{total_gt} passed")
 
+        if cert.emission_results:
+            total_e = sum(r.get("passed", 0) for r in cert.emission_results.values())
+            total_et = sum(r.get("total", 0) for r in cert.emission_results.values())
+            print(f"  Emission tests: {total_e}/{total_et} passed")
+
         print(f"  Saved to: {path}")
 
 
