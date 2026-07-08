@@ -27,6 +27,11 @@ def _hash_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _impl_src_path(project: ProjectManager, component_id: str) -> Path:
+    """Implementation src path without creating missing directories."""
+    return project.project_dir / "src" / component_id
+
+
 def compute_self_hash(cert: CertificationArtifact) -> str:
     """Compute self-integrity hash.
 
@@ -155,7 +160,7 @@ async def certify(project: ProjectManager) -> CertificationArtifact:
     all_visible_pass = True
     for cid, suite in test_suites.items():
         test_file = project.test_code_path(cid)
-        impl_dir = project.impl_src_dir(cid)
+        impl_dir = _impl_src_path(project, cid)
         if not test_file.exists() or not impl_dir.exists():
             cert.visible_results[cid] = {"total": 0, "passed": 0, "failed": 0, "skipped": True}
             all_visible_pass = False
@@ -181,7 +186,7 @@ async def certify(project: ProjectManager) -> CertificationArtifact:
     all_goodhart_pass = True
     for cid, suite in goodhart_suites.items():
         test_file = project.goodhart_test_code_path(cid)
-        impl_dir = project.impl_src_dir(cid)
+        impl_dir = _impl_src_path(project, cid)
         if not test_file.exists() or not impl_dir.exists():
             cert.goodhart_results[cid] = {"total": 0, "passed": 0, "failed": 0, "skipped": True}
             all_goodhart_pass = False
@@ -209,7 +214,7 @@ async def certify(project: ProjectManager) -> CertificationArtifact:
     all_emission_pass = True
     for cid in contracts:
         test_file = project.emission_test_path(cid)
-        impl_dir = project.impl_src_dir(cid)
+        impl_dir = _impl_src_path(project, cid)
         if not test_file.exists():
             cert.emission_results[cid] = {
                 "total": 0,
@@ -256,7 +261,11 @@ async def certify(project: ProjectManager) -> CertificationArtifact:
         cert.summary = "Visible and emission compliance tests pass but Goodhart tests have failures"
     elif not all_emission_pass:
         cert.verdict = "fail"
-        cert.summary = "Emission compliance test failures detected"
+        cert.summary = (
+            "Emission compliance and visible test failures detected"
+            if not all_visible_pass
+            else "Emission compliance test failures detected"
+        )
     else:
         cert.verdict = "fail"
         cert.summary = "Test failures detected"

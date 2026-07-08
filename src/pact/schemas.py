@@ -816,7 +816,7 @@ class CertificationArtifact(BaseModel):
     contract_hashes: dict[str, str] = {}       # cid -> sha256
     test_hashes: dict[str, str] = {}           # cid -> sha256 of contract_test_suite.json
     goodhart_hashes: dict[str, str] = {}       # cid -> sha256 of goodhart_test_suite.json
-    emission_hashes: dict[str, str] = {}       # cid -> sha256 of emission_test source
+    emission_hashes: dict[str, str] = {}       # cid -> sha256 of emission_test source; "" means the file was absent
 
     # Test result summaries
     visible_results: dict[str, dict] = {}      # cid -> {total, passed, failed}

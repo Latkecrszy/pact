@@ -14,7 +14,7 @@ from pact.schemas import (
 )
 
 
-def _project_with_contract(tmp_path) -> ProjectManager:
+def _project_with_contract(tmp_path, *, create_impl: bool = True) -> ProjectManager:
     project = ProjectManager(tmp_path)
     cid = "comp_a"
 
@@ -51,12 +51,17 @@ def _project_with_contract(tmp_path) -> ProjectManager:
             generated_code="def test_goodhart():\n    pass\n",
         )
     )
-    project.impl_src_dir(cid).mkdir(parents=True, exist_ok=True)
+    if create_impl:
+        project.impl_src_dir(cid).mkdir(parents=True, exist_ok=True)
     return project
 
 
 def _passing_results() -> TestResults:
     return TestResults(total=1, passed=1, failed=0)
+
+
+def _failing_results() -> TestResults:
+    return TestResults(total=1, passed=0, failed=1)
 
 
 def test_certify_fails_closed_when_emission_test_missing(tmp_path):
@@ -77,6 +82,39 @@ def test_certify_fails_closed_when_emission_test_missing(tmp_path):
     }
     assert cert.emission_hashes["comp_a"] == ""
     assert runner.await_count == 2
+
+
+def test_certify_summary_reports_visible_and_emission_failures(tmp_path):
+    project = _project_with_contract(tmp_path)
+    runner = AsyncMock(side_effect=[_failing_results(), _passing_results()])
+
+    with patch("pact.certification.run_contract_tests", runner):
+        cert = asyncio.run(certify(project))
+
+    assert cert.verdict == "fail"
+    assert cert.summary == "Emission compliance and visible test failures detected"
+    assert cert.visible_results["comp_a"] == {"total": 1, "passed": 0, "failed": 1}
+    assert cert.emission_results["comp_a"]["missing_test"] is True
+    assert runner.await_count == 2
+
+
+def test_certify_fails_closed_when_emission_impl_dir_missing(tmp_path):
+    project = _project_with_contract(tmp_path, create_impl=False)
+    project.save_emission_test("comp_a", "def test_emission():\n    pass\n")
+    runner = AsyncMock(return_value=_passing_results())
+
+    with patch("pact.certification.run_contract_tests", runner):
+        cert = asyncio.run(certify(project))
+
+    assert cert.verdict == "fail"
+    assert cert.emission_results["comp_a"] == {
+        "total": 0,
+        "passed": 0,
+        "failed": 1,
+        "missing_implementation": True,
+        "error": "Missing implementation directory",
+    }
+    assert runner.await_count == 0
 
 
 def test_certify_runs_and_hashes_emission_tests(tmp_path):
