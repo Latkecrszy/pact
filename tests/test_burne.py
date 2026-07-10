@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +15,10 @@ from pact import burne
 def _workspace(tmp_path: Path) -> Path:
     (tmp_path / "pact" / "api" / "contracts").mkdir(parents=True)
     (tmp_path / "pact" / "api" / "tests").mkdir(parents=True)
+    (tmp_path / "pact" / "api" / "contracts" / "contract.json").write_text(
+        '{"component":"api"}\n',
+        encoding="utf-8",
+    )
     (tmp_path / "services" / "api").mkdir(parents=True)
     (tmp_path / "services" / "api" / "handler.py").write_text("def handler():\n    return True\n", encoding="utf-8")
     return tmp_path
@@ -32,6 +36,7 @@ def _env(**overrides: str) -> dict[str, str]:
         "AGENT_SAFE_SPEC_AGENT_ROLE": "spec-agent",
         "AGENT_SAFE_REPAIR_AGENT_ALLOWED_CONTEXT": json.dumps({"issue_context_ref": "triage.json"}),
         "AGENT_SAFE_REPAIR_AGENT_FORBIDDEN_WRITES": "contracts,visible-tests,control-plane,hidden-oracle",
+        "OPENAI_API_KEY": "sk-test",
     }
     values.update(overrides)
     return values
@@ -43,17 +48,35 @@ def _args(**overrides: object) -> argparse.Namespace:
     return argparse.Namespace(**values)
 
 
-def _successful_codex(captured: dict[str, object]):
-    def fake_run(command, *, input, capture_output, text, cwd, env, timeout, check):  # noqa: A002
-        captured["command"] = command
-        captured["input"] = input
-        captured["cwd"] = cwd
-        captured["timeout"] = timeout
-        output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text("agent completed", encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0, stdout="stdout", stderr="")
+def _response(agent_payload: dict[str, object], *, input_tokens: int = 100, output_tokens: int = 50) -> dict[str, object]:
+    return {
+        "id": "resp_test",
+        "output": [
+            {
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": json.dumps(agent_payload),
+                    }
+                ],
+            }
+        ],
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+        },
+    }
 
-    return fake_run
+
+def _successful_openai(captured: dict[str, object], agent_payload: dict[str, object]):
+    def fake_post(request_payload, *, api_key, timeout_seconds):
+        captured["request"] = request_payload
+        captured["api_key"] = api_key
+        captured["timeout_seconds"] = timeout_seconds
+        return _response(agent_payload)
+
+    return fake_post
 
 
 def _load_report(path: Path) -> dict[str, object]:
@@ -77,8 +100,7 @@ def test_spec_author_fails_closed_without_required_env(tmp_path: Path, monkeypat
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        result = burne.run_burne_spec_author(_args(), env={})
+    result = burne.run_burne_spec_author(_args(), env={})
 
     assert result == 2
 
@@ -88,8 +110,7 @@ def test_caps_reject_values_above_policy(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "report.json"
 
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        result = burne.run_burne_spec_author(_args(output="report.json"), env=_env(AGENT_SAFE_AGENT_MAX_USD="1.01"))
+    result = burne.run_burne_spec_author(_args(output="report.json"), env=_env(AGENT_SAFE_AGENT_MAX_USD="1.01"))
 
     report = _load_report(output)
     assert result == 2
@@ -101,9 +122,8 @@ def test_pact_project_rejects_workspace_root_and_non_component_path(tmp_path: Pa
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        root_result = burne.run_burne_spec_author(_args(), env=_env(AGENT_SAFE_PACT_PROJECT="."))
-        broad_result = burne.run_burne_spec_author(_args(), env=_env(AGENT_SAFE_PACT_PROJECT="pact"))
+    root_result = burne.run_burne_spec_author(_args(), env=_env(AGENT_SAFE_PACT_PROJECT="."))
+    broad_result = burne.run_burne_spec_author(_args(), env=_env(AGENT_SAFE_PACT_PROJECT="pact"))
 
     assert root_result == 2
     assert broad_result == 2
@@ -113,8 +133,7 @@ def test_spec_author_rejects_source_root(tmp_path: Path, monkeypatch: pytest.Mon
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        result = burne.run_burne_spec_author(_args(source_root=["services/api"]), env=_env())
+    result = burne.run_burne_spec_author(_args(source_root=["services/api"]), env=_env())
 
     assert result == 2
 
@@ -123,8 +142,7 @@ def test_repair_requires_source_root(tmp_path: Path, monkeypatch: pytest.MonkeyP
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        result = burne.run_burne_repair(_args(), env=_env())
+    result = burne.run_burne_repair(_args(), env=_env())
 
     assert result == 2
 
@@ -134,51 +152,87 @@ def test_repair_rejects_forbidden_source_root(tmp_path: Path, monkeypatch: pytes
     (tmp_path / ".github").mkdir()
     monkeypatch.chdir(tmp_path)
 
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        result = burne.run_burne_repair(_args(source_root=[".github"]), env=_env())
+    result = burne.run_burne_repair(_args(source_root=[".github"]), env=_env())
 
     assert result == 2
 
 
-def test_repair_prompt_and_codex_invocation_are_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_repair_openai_request_is_bounded_and_applies_allowed_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
     captured: dict[str, object] = {}
     output = tmp_path / "repair-report.json"
+    new_handler = "def handler():\n    return 'fixed'\n"
 
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        with patch("pact.burne.subprocess.run", side_effect=_successful_codex(captured)):
-            result = burne.run_burne_repair(
-                _args(source_root=["services/api"], output="repair-report.json"),
-                env=_env(),
-            )
+    with patch(
+        "pact.burne._post_openai_response",
+        side_effect=_successful_openai(
+            captured,
+            {
+                "status": "changed",
+                "summary": "updated handler",
+                "changes": [{"path": "services/api/handler.py", "content": new_handler}],
+            },
+        ),
+    ):
+        result = burne.run_burne_repair(
+            _args(source_root=["services/api"], output="repair-report.json"),
+            env=_env(),
+        )
 
     report = _load_report(output)
-    command = captured["command"]
+    request = captured["request"]
+    input_payload = json.loads(str(request["input"]))
+    included_paths = {item["path"] for item in input_payload["files"]}
+
     assert result == 0
     assert report["accepted"] is True
-    assert command[:2] == ["codex", "exec"]
-    assert command[command.index("-C") + 1] == str(tmp_path)
-    assert command[command.index("--sandbox") + 1] == "workspace-write"
-    assert captured["timeout"] == 30
-    assert "Allowed implementation write roots: services/api" in str(captured["input"])
-    assert "max_usd: 0.25" in str(captured["input"])
+    assert report["agent"]["provider"] == "openai-responses-api"
+    assert report["agent"]["model"] == "gpt-4o-mini"
+    assert report["agent"]["request"]["max_output_tokens"] == request["max_output_tokens"]
+    assert request["max_output_tokens"] <= 5000
+    assert request["max_tool_calls"] == 10
+    assert request["store"] is False
+    assert request["truncation"] == "disabled"
+    assert captured["api_key"] == "sk-test"
+    assert captured["timeout_seconds"] == 30
+    assert "services/api/handler.py" in included_paths
+    assert "pact/api/contracts/contract.json" in included_paths
+    assert (tmp_path / "services" / "api" / "handler.py").read_text(encoding="utf-8") == new_handler
+    assert report["agent"]["applied_paths"] == ["services/api/handler.py"]
 
 
-def test_codex_timeout_returns_failed_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_missing_openai_key_fails_before_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "missing-key-report.json"
+
+    with patch("pact.burne._post_openai_response") as post:
+        result = burne.run_burne_repair(
+            _args(source_root=["services/api"], output="missing-key-report.json"),
+            env=_env(OPENAI_API_KEY=""),
+        )
+
+    report = _load_report(output)
+    assert result == 2
+    assert report["status"] == "policy-failed"
+    assert any(item["name"] == "OPENAI_API_KEY" for item in report["policy"]["violations"])
+    post.assert_not_called()
+
+
+def test_openai_timeout_returns_failed_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "timeout-report.json"
 
-    def timeout_run(command, **kwargs):
-        raise subprocess.TimeoutExpired(command, timeout=kwargs["timeout"], output="partial", stderr="late")
-
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        with patch("pact.burne.subprocess.run", side_effect=timeout_run):
-            result = burne.run_burne_repair(
-                _args(source_root=["services/api"], output="timeout-report.json"),
-                env=_env(),
-            )
+    with patch("pact.burne._post_openai_response", side_effect=TimeoutError):
+        result = burne.run_burne_repair(
+            _args(source_root=["services/api"], output="timeout-report.json"),
+            env=_env(),
+        )
 
     report = _load_report(output)
     assert result == 124
@@ -187,26 +241,22 @@ def test_codex_timeout_returns_failed_report(tmp_path: Path, monkeypatch: pytest
     assert report["agent"]["status"] == "timeout"
 
 
-def test_failed_codex_run_returns_failed_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_failed_openai_request_returns_failed_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "failed-report.json"
 
-    def failed_run(command, **kwargs):
-        return subprocess.CompletedProcess(command, 7, stdout="", stderr="failed")
-
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        with patch("pact.burne.subprocess.run", side_effect=failed_run):
-            result = burne.run_burne_repair(
-                _args(source_root=["services/api"], output="failed-report.json"),
-                env=_env(),
-            )
+    with patch("pact.burne._post_openai_response", side_effect=urllib.error.URLError("failed")):
+        result = burne.run_burne_repair(
+            _args(source_root=["services/api"], output="failed-report.json"),
+            env=_env(),
+        )
 
     report = _load_report(output)
-    assert result == 7
+    assert result == 1
     assert report["accepted"] is False
     assert report["status"] == "failed"
-    assert report["agent"]["exit_code"] == 7
+    assert report["agent"]["exit_code"] == 1
 
 
 def test_write_guard_rejects_forbidden_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -215,19 +265,36 @@ def test_write_guard_rejects_forbidden_changes(tmp_path: Path, monkeypatch: pyte
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "write-guard-report.json"
 
-    def bad_run(command, **kwargs):
-        (tmp_path / ".github" / "workflows" / "owned.yml").write_text("name: bad\n", encoding="utf-8")
-        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
-    with patch("pact.burne.shutil.which", return_value="/usr/bin/codex"):
-        with patch("pact.burne.subprocess.run", side_effect=bad_run):
-            result = burne.run_burne_repair(
-                _args(source_root=["services/api"], output="write-guard-report.json"),
-                env=_env(),
-            )
+    with patch(
+        "pact.burne._post_openai_response",
+        return_value=_response(
+            {
+                "status": "changed",
+                "summary": "bad write",
+                "changes": [{"path": ".github/workflows/owned.yml", "content": "name: bad\n"}],
+            }
+        ),
+    ):
+        result = burne.run_burne_repair(
+            _args(source_root=["services/api"], output="write-guard-report.json"),
+            env=_env(),
+        )
 
     report = _load_report(output)
     assert result == 3
     assert report["accepted"] is False
     assert report["write_guard"]["status"] == "failed"
     assert ".github/workflows/owned.yml" in report["write_guard"]["forbidden_changed_paths"]
+    assert not (tmp_path / ".github" / "workflows" / "owned.yml").exists()
+
+
+def test_context_size_fails_closed_before_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "services" / "api" / "huge.py").write_text("x" * (burne.MAX_FILE_BYTES + 1), encoding="utf-8")
+
+    with patch("pact.burne._post_openai_response") as post:
+        result = burne.run_burne_repair(_args(source_root=["services/api"]), env=_env())
+
+    assert result == 2
+    post.assert_not_called()
