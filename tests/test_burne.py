@@ -259,6 +259,54 @@ def test_failed_openai_request_returns_failed_report(tmp_path: Path, monkeypatch
     assert report["agent"]["exit_code"] == 1
 
 
+def test_incomplete_openai_response_fails_before_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "incomplete-report.json"
+    handler = tmp_path / "services" / "api" / "handler.py"
+    original_handler = handler.read_text(encoding="utf-8")
+
+    with patch(
+        "pact.burne._post_openai_response",
+        return_value={
+            "id": "resp_incomplete",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output": [
+                {
+                    "content": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "status": "changed",
+                                    "summary": "partial response",
+                                    "changes": [{"path": "services/api/handler.py", "content": "owned\n"}],
+                                }
+                            )
+                        }
+                    ]
+                }
+            ],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+            },
+        },
+    ):
+        result = burne.run_burne_repair(
+            _args(source_root=["services/api"], output="incomplete-report.json"),
+            env=_env(),
+        )
+
+    report = _load_report(output)
+    assert result == 1
+    assert report["accepted"] is False
+    assert report["status"] == "failed"
+    assert report["agent"]["applied_paths"] == []
+    assert any(item["name"] == "openai-response" for item in report["policy"]["violations"])
+    assert handler.read_text(encoding="utf-8") == original_handler
+
+
 def test_write_guard_rejects_forbidden_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _workspace(tmp_path)
     (tmp_path / ".github" / "workflows").mkdir(parents=True)

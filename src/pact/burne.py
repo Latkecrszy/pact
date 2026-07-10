@@ -671,6 +671,19 @@ def _usage_tokens(payload: Mapping[str, object]) -> tuple[int, int]:
     return int(input_tokens or 0), int(output_tokens or 0)
 
 
+def _openai_response_rejection(payload: Mapping[str, object]) -> str | None:
+    status = payload.get("status")
+    if isinstance(status, str) and status and status != "completed":
+        details = payload.get("incomplete_details")
+        suffix = f": {_short_text(details)}" if details is not None else ""
+        return f"OpenAI response status is {status}{suffix}"
+    if payload.get("error") is not None:
+        return f"OpenAI response returned error: {_short_text(payload.get('error'))}"
+    if payload.get("incomplete_details") is not None:
+        return f"OpenAI response is incomplete: {_short_text(payload.get('incomplete_details'))}"
+    return None
+
+
 def _parse_agent_json(text: str) -> dict[str, object]:
     return json.loads(text)
 
@@ -854,7 +867,6 @@ def run_openai_agent_once(
         )
 
     elapsed = time.monotonic() - started
-    response_text = _extract_response_text(response_payload)
     input_tokens, output_tokens = _usage_tokens(response_payload)
     estimated_cost = _bounded_token_cost(
         model=request_plan.model,
@@ -866,6 +878,22 @@ def run_openai_agent_once(
     if estimated_cost > int(caps.get("max_usd_cents") or 0) / 100:
         violations.append(violation("budget", "OpenAI response exceeded AGENT_SAFE_AGENT_MAX_USD"))
 
+    response_rejection = _openai_response_rejection(response_payload)
+    if response_rejection is not None:
+        violations.append(violation("openai-response", response_rejection))
+        return request_plan, AgentResult(
+            status="failed",
+            exit_code=1,
+            output=_short_text(response_rejection),
+            elapsed_seconds=elapsed,
+            response_id=str(response_payload.get("id", "") or ""),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            estimated_cost_usd=estimated_cost,
+            applied_paths=(),
+        )
+
+    response_text = _extract_response_text(response_payload)
     try:
         agent_json = _parse_agent_json(response_text)
     except json.JSONDecodeError as error:
