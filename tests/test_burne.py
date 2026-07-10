@@ -288,6 +288,38 @@ def test_write_guard_rejects_forbidden_changes(tmp_path: Path, monkeypatch: pyte
     assert not (tmp_path / ".github" / "workflows" / "owned.yml").exists()
 
 
+def test_write_guard_rejects_symlinked_allowed_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _workspace(tmp_path)
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    target = tmp_path / ".github" / "workflows" / "ci.yml"
+    target.write_text("before\n", encoding="utf-8")
+    (tmp_path / "services" / "api" / "ci-link.yml").symlink_to(target)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "symlink-report.json"
+
+    with patch(
+        "pact.burne._post_openai_response",
+        return_value=_response(
+            {
+                "status": "changed",
+                "summary": "bad symlink write",
+                "changes": [{"path": "services/api/ci-link.yml", "content": "after\n"}],
+            }
+        ),
+    ):
+        result = burne.run_burne_repair(
+            _args(source_root=["services/api"], output="symlink-report.json"),
+            env=_env(),
+        )
+
+    report = _load_report(output)
+    assert result == 3
+    assert report["accepted"] is False
+    assert report["write_guard"]["status"] == "failed"
+    assert target.read_text(encoding="utf-8") == "before\n"
+    assert any("symlinked write path" in item["message"] for item in report["policy"]["violations"])
+
+
 def test_context_size_fails_closed_before_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -298,3 +330,19 @@ def test_context_size_fails_closed_before_request(tmp_path: Path, monkeypatch: p
 
     assert result == 2
     post.assert_not_called()
+
+
+def test_context_candidate_overflow_fails_closed_even_when_candidates_are_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    for index in range(burne.MAX_CONTEXT_FILES + 1):
+        (tmp_path / "services" / "api" / f"binary-{index:03}.bin").write_bytes(b"\x00" * 4)
+
+    with patch("pact.burne._post_openai_response") as post:
+        result = burne.run_burne_repair(_args(source_root=["services/api"]), env=_env())
+
+    assert result == 2
+    assert post.call_count == 0

@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from pact.budget import get_model_pricing_table
 
@@ -356,6 +356,20 @@ def _path_allowed(relative: str, allowed_roots: Sequence[str]) -> bool:
     return any(relative == root or relative.startswith(f"{root}/") for root in allowed_roots)
 
 
+def _resolved_allowed_roots(cwd: Path, allowed_roots: Sequence[str]) -> list[Path]:
+    workspace_root = cwd.resolve()
+    return [(workspace_root / root).resolve() for root in allowed_roots]
+
+
+def _path_has_existing_symlink_component(cwd: Path, relative: str) -> bool:
+    current = cwd.resolve()
+    for part in Path(relative).parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
+
+
 def _resolve_openai_model(env: Mapping[str, str]) -> str:
     return str(
         env.get("AGENT_SAFE_OPENAI_MODEL")
@@ -463,8 +477,7 @@ def _read_context_file(path: Path) -> tuple[str, str, int] | None:
     return hashlib.sha256(data).hexdigest(), text, len(data)
 
 
-def _iter_context_file_paths(root: Path) -> Sequence[Path]:
-    paths: list[Path] = []
+def _iter_context_file_paths(root: Path) -> Iterator[Path]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [
             name
@@ -473,10 +486,7 @@ def _iter_context_file_paths(root: Path) -> Sequence[Path]:
             and not (Path(dirpath) / name).is_symlink()
         ]
         for filename in sorted(filenames):
-            paths.append(Path(dirpath) / filename)
-            if len(paths) > MAX_CONTEXT_FILES:
-                return paths
-    return paths
+            yield Path(dirpath) / filename
 
 
 def _collect_context_files(
@@ -486,9 +496,14 @@ def _collect_context_files(
 ) -> list[ContextFile]:
     files: list[ContextFile] = []
     total_bytes = 0
+    raw_candidates = 0
     workspace_root = cwd.resolve()
     for root in roots:
         for path in _iter_context_file_paths(root.resolved):
+            raw_candidates += 1
+            if raw_candidates > MAX_CONTEXT_FILES:
+                violations.append(violation("context", f"context candidate files exceed MAX_CONTEXT_FILES={MAX_CONTEXT_FILES}"))
+                return files
             relative_parts = path.relative_to(root.resolved).parts
             if any(part in SKIPPED_CONTEXT_DIRS for part in relative_parts):
                 continue
@@ -684,6 +699,7 @@ def _apply_agent_changes(
         return summary, ()
 
     prepared: list[tuple[Path, str, str]] = []
+    resolved_allowed_roots = _resolved_allowed_roots(cwd, allowed_roots)
     for change in changes:
         if not isinstance(change, dict):
             violations.append(violation("agent", "agent change must be an object"))
@@ -703,11 +719,14 @@ def _apply_agent_changes(
         if not _path_allowed(path.relative, allowed_roots):
             violations.append(violation("write-guard", f"agent attempted forbidden write: {path.relative}"))
             continue
+        if _path_has_existing_symlink_component(cwd, path.relative):
+            violations.append(violation("write-guard", f"agent attempted symlinked write path: {path.relative}"))
+            continue
+        if not any(_path_is_relative_to(path.resolved, root) for root in resolved_allowed_roots):
+            violations.append(violation("write-guard", f"agent attempted resolved write outside allowed roots: {path.relative}"))
+            continue
         if path.resolved.exists() and path.resolved.is_dir():
             violations.append(violation("write-guard", f"agent attempted to write directory: {path.relative}"))
-            continue
-        if path.resolved.exists() and path.resolved.is_symlink():
-            violations.append(violation("write-guard", f"agent attempted to write symlink: {path.relative}"))
             continue
         if not isinstance(content, str):
             violations.append(violation("agent", f"agent content for {path.relative} must be a string"))
