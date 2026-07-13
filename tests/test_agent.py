@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pact import burne
+from pact import agent
 
 
 def _workspace(tmp_path: Path) -> Path:
@@ -26,16 +26,16 @@ def _workspace(tmp_path: Path) -> Path:
 
 def _env(**overrides: str) -> dict[str, str]:
     values = {
-        "AGENT_SAFE_AGENT_MAX_WALL_SECONDS": "30",
-        "AGENT_SAFE_AGENT_MAX_MODEL_TOKENS": "5000",
-        "AGENT_SAFE_AGENT_MAX_TOOL_CALLS": "10",
-        "AGENT_SAFE_AGENT_MAX_USD": "0.25",
-        "AGENT_SAFE_COMPONENT": "api",
-        "AGENT_SAFE_PACT_COMPONENT_ID": "api",
-        "AGENT_SAFE_PACT_PROJECT": "pact/api",
-        "AGENT_SAFE_SPEC_AGENT_ROLE": "spec-agent",
-        "AGENT_SAFE_REPAIR_AGENT_ALLOWED_CONTEXT": json.dumps({"issue_context_ref": "triage.json"}),
-        "AGENT_SAFE_REPAIR_AGENT_FORBIDDEN_WRITES": "contracts,visible-tests,control-plane,hidden-oracle",
+        "PACT_AGENT_MAX_WALL_SECONDS": "30",
+        "PACT_AGENT_MAX_MODEL_TOKENS": "5000",
+        "PACT_AGENT_MAX_TOOL_CALLS": "10",
+        "PACT_AGENT_MAX_USD": "0.25",
+        "PACT_AGENT_COMPONENT": "api",
+        "PACT_AGENT_COMPONENT_ID": "api",
+        "PACT_AGENT_PROJECT": "pact/api",
+        "PACT_AGENT_ROLE": "spec-author",
+        "PACT_AGENT_ALLOWED_CONTEXT": json.dumps({"issue_context_ref": "triage.json"}),
+        "PACT_AGENT_FORBIDDEN_WRITES": "contracts,visible-tests,control-plane,hidden-oracle",
         "OPENAI_API_KEY": "sk-test",
     }
     values.update(overrides)
@@ -83,10 +83,10 @@ def _load_report(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_cli_exposes_burne_commands(capsys):
+def test_cli_exposes_agent_commands(capsys):
     from pact.cli import main
 
-    with patch.object(sys, "argv", ["pact", "burne", "--help"]):
+    with patch.object(sys, "argv", ["pact", "agent", "--help"]):
         with pytest.raises(SystemExit) as error:
             main()
 
@@ -100,9 +100,35 @@ def test_spec_author_fails_closed_without_required_env(tmp_path: Path, monkeypat
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    result = burne.run_burne_spec_author(_args(), env={})
+    result = agent.run_agent_spec_author(_args(), env={})
 
     assert result == 2
+
+
+def test_legacy_agent_safe_env_names_remain_accepted_as_aliases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    _workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "report.json"
+    legacy_env = {
+        "AGENT_SAFE_AGENT_MAX_WALL_SECONDS": "30",
+        "AGENT_SAFE_AGENT_MAX_MODEL_TOKENS": "5000",
+        "AGENT_SAFE_AGENT_MAX_TOOL_CALLS": "10",
+        "AGENT_SAFE_AGENT_MAX_USD": "0.25",
+        "AGENT_SAFE_COMPONENT": "api",
+        "AGENT_SAFE_PACT_COMPONENT_ID": "api",
+        "AGENT_SAFE_PACT_PROJECT": "pact/api",
+        "AGENT_SAFE_SPEC_AGENT_ROLE": "spec-agent",
+    }
+
+    result = agent.run_agent_spec_author(_args(output="report.json"), env=legacy_env)
+
+    report = _load_report(output)
+    assert result == 2
+    violation_names = {item["name"] for item in report["policy"]["violations"]}
+    assert "OPENAI_API_KEY" in violation_names
+    assert "PACT_AGENT_COMPONENT" not in violation_names
+    assert "PACT_AGENT_PROJECT" not in violation_names
+    assert "PACT_AGENT_MAX_USD" not in violation_names
 
 
 def test_caps_reject_values_above_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -110,20 +136,20 @@ def test_caps_reject_values_above_policy(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "report.json"
 
-    result = burne.run_burne_spec_author(_args(output="report.json"), env=_env(AGENT_SAFE_AGENT_MAX_USD="1.01"))
+    result = agent.run_agent_spec_author(_args(output="report.json"), env=_env(PACT_AGENT_MAX_USD="1.01"))
 
     report = _load_report(output)
     assert result == 2
     assert report["status"] == "policy-failed"
-    assert any(item["name"] == "AGENT_SAFE_AGENT_MAX_USD" for item in report["policy"]["violations"])
+    assert any(item["name"] == "PACT_AGENT_MAX_USD" for item in report["policy"]["violations"])
 
 
 def test_pact_project_rejects_workspace_root_and_non_component_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    root_result = burne.run_burne_spec_author(_args(), env=_env(AGENT_SAFE_PACT_PROJECT="."))
-    broad_result = burne.run_burne_spec_author(_args(), env=_env(AGENT_SAFE_PACT_PROJECT="pact"))
+    root_result = agent.run_agent_spec_author(_args(), env=_env(PACT_AGENT_PROJECT="."))
+    broad_result = agent.run_agent_spec_author(_args(), env=_env(PACT_AGENT_PROJECT="pact"))
 
     assert root_result == 2
     assert broad_result == 2
@@ -133,7 +159,7 @@ def test_spec_author_rejects_source_root(tmp_path: Path, monkeypatch: pytest.Mon
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    result = burne.run_burne_spec_author(_args(source_root=["services/api"]), env=_env())
+    result = agent.run_agent_spec_author(_args(source_root=["services/api"]), env=_env())
 
     assert result == 2
 
@@ -142,7 +168,7 @@ def test_repair_requires_source_root(tmp_path: Path, monkeypatch: pytest.MonkeyP
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
 
-    result = burne.run_burne_repair(_args(), env=_env())
+    result = agent.run_agent_repair(_args(), env=_env())
 
     assert result == 2
 
@@ -152,7 +178,7 @@ def test_repair_rejects_forbidden_source_root(tmp_path: Path, monkeypatch: pytes
     (tmp_path / ".github").mkdir()
     monkeypatch.chdir(tmp_path)
 
-    result = burne.run_burne_repair(_args(source_root=[".github"]), env=_env())
+    result = agent.run_agent_repair(_args(source_root=[".github"]), env=_env())
 
     assert result == 2
 
@@ -168,7 +194,7 @@ def test_repair_openai_request_is_bounded_and_applies_allowed_changes(
     new_handler = "def handler():\n    return 'fixed'\n"
 
     with patch(
-        "pact.burne._post_openai_response",
+        "pact.agent._post_openai_response",
         side_effect=_successful_openai(
             captured,
             {
@@ -178,7 +204,7 @@ def test_repair_openai_request_is_bounded_and_applies_allowed_changes(
             },
         ),
     ):
-        result = burne.run_burne_repair(
+        result = agent.run_agent_repair(
             _args(source_root=["services/api"], output="repair-report.json"),
             env=_env(),
         )
@@ -210,8 +236,8 @@ def test_missing_openai_key_fails_before_request(tmp_path: Path, monkeypatch: py
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "missing-key-report.json"
 
-    with patch("pact.burne._post_openai_response") as post:
-        result = burne.run_burne_repair(
+    with patch("pact.agent._post_openai_response") as post:
+        result = agent.run_agent_repair(
             _args(source_root=["services/api"], output="missing-key-report.json"),
             env=_env(OPENAI_API_KEY=""),
         )
@@ -228,8 +254,8 @@ def test_openai_timeout_returns_failed_report(tmp_path: Path, monkeypatch: pytes
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "timeout-report.json"
 
-    with patch("pact.burne._post_openai_response", side_effect=TimeoutError):
-        result = burne.run_burne_repair(
+    with patch("pact.agent._post_openai_response", side_effect=TimeoutError):
+        result = agent.run_agent_repair(
             _args(source_root=["services/api"], output="timeout-report.json"),
             env=_env(),
         )
@@ -246,8 +272,8 @@ def test_failed_openai_request_returns_failed_report(tmp_path: Path, monkeypatch
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "failed-report.json"
 
-    with patch("pact.burne._post_openai_response", side_effect=urllib.error.URLError("failed")):
-        result = burne.run_burne_repair(
+    with patch("pact.agent._post_openai_response", side_effect=urllib.error.URLError("failed")):
+        result = agent.run_agent_repair(
             _args(source_root=["services/api"], output="failed-report.json"),
             env=_env(),
         )
@@ -267,7 +293,7 @@ def test_incomplete_openai_response_fails_before_writes(tmp_path: Path, monkeypa
     original_handler = handler.read_text(encoding="utf-8")
 
     with patch(
-        "pact.burne._post_openai_response",
+        "pact.agent._post_openai_response",
         return_value={
             "id": "resp_incomplete",
             "status": "incomplete",
@@ -293,7 +319,7 @@ def test_incomplete_openai_response_fails_before_writes(tmp_path: Path, monkeypa
             },
         },
     ):
-        result = burne.run_burne_repair(
+        result = agent.run_agent_repair(
             _args(source_root=["services/api"], output="incomplete-report.json"),
             env=_env(),
         )
@@ -314,7 +340,7 @@ def test_write_guard_rejects_forbidden_changes(tmp_path: Path, monkeypatch: pyte
     output = tmp_path / "write-guard-report.json"
 
     with patch(
-        "pact.burne._post_openai_response",
+        "pact.agent._post_openai_response",
         return_value=_response(
             {
                 "status": "changed",
@@ -323,7 +349,7 @@ def test_write_guard_rejects_forbidden_changes(tmp_path: Path, monkeypatch: pyte
             }
         ),
     ):
-        result = burne.run_burne_repair(
+        result = agent.run_agent_repair(
             _args(source_root=["services/api"], output="write-guard-report.json"),
             env=_env(),
         )
@@ -346,7 +372,7 @@ def test_write_guard_rejects_symlinked_allowed_path(tmp_path: Path, monkeypatch:
     output = tmp_path / "symlink-report.json"
 
     with patch(
-        "pact.burne._post_openai_response",
+        "pact.agent._post_openai_response",
         return_value=_response(
             {
                 "status": "changed",
@@ -355,7 +381,7 @@ def test_write_guard_rejects_symlinked_allowed_path(tmp_path: Path, monkeypatch:
             }
         ),
     ):
-        result = burne.run_burne_repair(
+        result = agent.run_agent_repair(
             _args(source_root=["services/api"], output="symlink-report.json"),
             env=_env(),
         )
@@ -371,10 +397,10 @@ def test_write_guard_rejects_symlinked_allowed_path(tmp_path: Path, monkeypatch:
 def test_context_size_fails_closed_before_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "services" / "api" / "huge.py").write_text("x" * (burne.MAX_FILE_BYTES + 1), encoding="utf-8")
+    (tmp_path / "services" / "api" / "huge.py").write_text("x" * (agent.MAX_FILE_BYTES + 1), encoding="utf-8")
 
-    with patch("pact.burne._post_openai_response") as post:
-        result = burne.run_burne_repair(_args(source_root=["services/api"]), env=_env())
+    with patch("pact.agent._post_openai_response") as post:
+        result = agent.run_agent_repair(_args(source_root=["services/api"]), env=_env())
 
     assert result == 2
     post.assert_not_called()
@@ -386,11 +412,11 @@ def test_context_candidate_overflow_fails_closed_even_when_candidates_are_skippe
 ):
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
-    for index in range(burne.MAX_CONTEXT_FILES + 1):
+    for index in range(agent.MAX_CONTEXT_FILES + 1):
         (tmp_path / "services" / "api" / f"binary-{index:03}.bin").write_bytes(b"\x00" * 4)
 
-    with patch("pact.burne._post_openai_response") as post:
-        result = burne.run_burne_repair(_args(source_root=["services/api"]), env=_env())
+    with patch("pact.agent._post_openai_response") as post:
+        result = agent.run_agent_repair(_args(source_root=["services/api"]), env=_env())
 
     assert result == 2
     assert post.call_count == 0

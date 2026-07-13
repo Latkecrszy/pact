@@ -29,7 +29,7 @@ Commands:
   pact incidents <project-dir>         List active/recent incidents
   pact incident <project-dir> <id>     Show incident details + diagnostic report
   pact production <subcommand> ...     Manage production-readiness artifact pack
-  pact burne <subcommand> ...          Run BURN-E constrained repair-lane agents
+  pact agent <subcommand> ...          Run constrained Pact agents
   pact ci <project-dir>               Generate GitHub Actions CI workflow
   pact deploy <project-dir>           Generate baton.yaml topology config
 """
@@ -402,16 +402,16 @@ def main() -> None:
     p_deploy.add_argument("--error-rate", type=float, default=5.0, help="Canary error rate threshold percent (default: 5.0)")
     p_deploy.add_argument("--p95-ms", type=float, default=500.0, help="Canary p95 latency threshold in ms (default: 500)")
 
-    # BURN-E constrained repair-lane agents
-    p_burne = subparsers.add_parser("burne", help="BURN-E constrained repair-lane agent commands")
-    burne_sub = p_burne.add_subparsers(dest="burne_command", required=True)
-    p_burne_spec = burne_sub.add_parser("spec-author", help="Run one constrained BURN-E spec-author agent")
-    p_burne_spec.add_argument("--output", default="", help="Write JSON report to this relative path")
-    p_burne_spec.add_argument("--source-root", action="append", default=[], help=argparse.SUPPRESS)
+    # Constrained agent commands
+    p_agent = subparsers.add_parser("agent", help="Constrained Pact agent commands")
+    agent_sub = p_agent.add_subparsers(dest="agent_command", required=True)
+    p_agent_spec = agent_sub.add_parser("spec-author", help="Run one constrained spec-author agent")
+    p_agent_spec.add_argument("--output", default="", help="Write JSON report to this relative path")
+    p_agent_spec.add_argument("--source-root", action="append", default=[], help=argparse.SUPPRESS)
 
-    p_burne_repair = burne_sub.add_parser("repair", help="Run one constrained BURN-E repair agent")
-    p_burne_repair.add_argument("--source-root", action="append", default=[], help="Allowed implementation source root")
-    p_burne_repair.add_argument("--output", default="", help="Write JSON report to this relative path")
+    p_agent_repair = agent_sub.add_parser("repair", help="Run one constrained repair agent")
+    p_agent_repair.add_argument("--source-root", action="append", default=[], help="Allowed implementation source root")
+    p_agent_repair.add_argument("--output", default="", help="Write JSON report to this relative path")
 
     # Sentinel integration subcommands
     p_sentinel = subparsers.add_parser("sentinel", help="Sentinel integration commands")
@@ -525,21 +525,21 @@ def main() -> None:
         asyncio.run(cmd_sync(args))
     elif args.command == "certify":
         asyncio.run(cmd_certify(args))
-    elif args.command == "burne":
-        sys.exit(cmd_burne(args))
+    elif args.command == "agent":
+        sys.exit(cmd_agent(args))
     elif args.command == "sentinel":
         cmd_sentinel(args)
 
 
-def cmd_burne(args: argparse.Namespace) -> int:
-    """Run BURN-E constrained repair-lane agent commands."""
-    from pact.burne import run_burne_repair, run_burne_spec_author
+def cmd_agent(args: argparse.Namespace) -> int:
+    """Run constrained Pact agent commands."""
+    from pact.agent import run_agent_repair, run_agent_spec_author
 
-    if args.burne_command == "spec-author":
-        return run_burne_spec_author(args)
-    if args.burne_command == "repair":
-        return run_burne_repair(args)
-    raise SystemExit("Usage: pact burne {spec-author,repair} ...")
+    if args.agent_command == "spec-author":
+        return run_agent_spec_author(args)
+    if args.agent_command == "repair":
+        return run_agent_repair(args)
+    raise SystemExit("Usage: pact agent {spec-author,repair} ...")
 
 
 def cmd_mcp_server(args: argparse.Namespace) -> None:

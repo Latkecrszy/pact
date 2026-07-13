@@ -1,9 +1,8 @@
-"""BURN-E constrained agent commands.
+"""Constrained Pact agent commands.
 
 These commands are intentionally narrower than Pact's general-purpose
-pipeline commands. They are designed for safe-env repair lanes where the
-workspace, component, Pact project, source roots, and spend caps are supplied
-by a trusted caller.
+pipeline commands. They are designed for workflows where a trusted caller
+supplies the workspace, component, Pact project, source roots, and spend caps.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ MAX_WALL_SECONDS = 900
 MAX_MODEL_TOKENS = 50_000
 MAX_TOOL_CALLS = 75
 MAX_USD_CENTS = 100
-REPORT_SCHEMA_VERSION = "pact-burne-agent/v1"
+REPORT_SCHEMA_VERSION = "pact-agent/v1"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 MAX_CONTEXT_FILES = 80
@@ -45,10 +44,17 @@ SKIPPED_CONTEXT_DIRS = {
 }
 
 CAP_ENV = {
-    "max_wall_seconds": "AGENT_SAFE_AGENT_MAX_WALL_SECONDS",
-    "max_model_tokens": "AGENT_SAFE_AGENT_MAX_MODEL_TOKENS",
-    "max_tool_calls": "AGENT_SAFE_AGENT_MAX_TOOL_CALLS",
-    "max_usd": "AGENT_SAFE_AGENT_MAX_USD",
+    "max_wall_seconds": "PACT_AGENT_MAX_WALL_SECONDS",
+    "max_model_tokens": "PACT_AGENT_MAX_MODEL_TOKENS",
+    "max_tool_calls": "PACT_AGENT_MAX_TOOL_CALLS",
+    "max_usd": "PACT_AGENT_MAX_USD",
+}
+
+CAP_ENV_ALIASES = {
+    "PACT_AGENT_MAX_WALL_SECONDS": ("AGENT_SAFE_AGENT_MAX_WALL_SECONDS",),
+    "PACT_AGENT_MAX_MODEL_TOKENS": ("AGENT_SAFE_AGENT_MAX_MODEL_TOKENS",),
+    "PACT_AGENT_MAX_TOOL_CALLS": ("AGENT_SAFE_AGENT_MAX_TOOL_CALLS",),
+    "PACT_AGENT_MAX_USD": ("AGENT_SAFE_AGENT_MAX_USD",),
 }
 
 FORBIDDEN_REPAIR_FORBIDDEN_WRITES = {
@@ -109,6 +115,14 @@ def violation(name: str, message: str) -> dict[str, str]:
     return {"name": name, "message": message}
 
 
+def _env_value(env: Mapping[str, str], key: str, *aliases: str) -> str:
+    for candidate in (key, *aliases):
+        value = env.get(candidate)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
 def _short_text(value: object, limit: int = 4000) -> str:
     text = "" if value is None else str(value)
     if len(text) <= limit:
@@ -122,7 +136,7 @@ def _parse_positive_int_cap(
     maximum: int,
     violations: list[dict[str, str]],
 ) -> int:
-    raw = str(env.get(key, "") or "").strip()
+    raw = _env_value(env, key, *CAP_ENV_ALIASES.get(key, ())).strip()
     if not raw:
         violations.append(violation(key, f"{key} is required"))
         return 0
@@ -137,7 +151,7 @@ def _parse_positive_int_cap(
 
 def _parse_usd_cap(env: Mapping[str, str], violations: list[dict[str, str]]) -> tuple[int, str]:
     key = CAP_ENV["max_usd"]
-    raw = str(env.get(key, "") or "").strip()
+    raw = _env_value(env, key, *CAP_ENV_ALIASES.get(key, ())).strip()
     if not raw:
         violations.append(violation(key, f"{key} is required"))
         return 0, "0.00"
@@ -222,11 +236,11 @@ def _clean_relative_path(
 
 
 def _validate_component(env: Mapping[str, str], violations: list[dict[str, str]]) -> str:
-    component = str(env.get("AGENT_SAFE_COMPONENT", "") or "").strip()
+    component = _env_value(env, "PACT_AGENT_COMPONENT", "AGENT_SAFE_COMPONENT").strip()
     if not component:
-        violations.append(violation("AGENT_SAFE_COMPONENT", "AGENT_SAFE_COMPONENT is required"))
+        violations.append(violation("PACT_AGENT_COMPONENT", "PACT_AGENT_COMPONENT is required"))
     elif not COMPONENT_RE.fullmatch(component):
-        violations.append(violation("AGENT_SAFE_COMPONENT", "AGENT_SAFE_COMPONENT has an invalid value"))
+        violations.append(violation("PACT_AGENT_COMPONENT", "PACT_AGENT_COMPONENT has an invalid value"))
     return component
 
 
@@ -237,8 +251,8 @@ def _validate_pact_project(
     violations: list[dict[str, str]],
 ) -> ResolvedPath | None:
     project = _clean_relative_path(
-        str(env.get("AGENT_SAFE_PACT_PROJECT", "") or ""),
-        field_name="AGENT_SAFE_PACT_PROJECT",
+        _env_value(env, "PACT_AGENT_PROJECT", "AGENT_SAFE_PACT_PROJECT"),
+        field_name="PACT_AGENT_PROJECT",
         cwd=cwd,
         violations=violations,
         require_exists=True,
@@ -249,16 +263,16 @@ def _validate_pact_project(
 
     parts = Path(project.relative).parts
     if len(parts) < 2:
-        violations.append(violation("AGENT_SAFE_PACT_PROJECT", "Pact project must be component-scoped, not a top-level root"))
+        violations.append(violation("PACT_AGENT_PROJECT", "Pact project must be component-scoped, not a top-level root"))
     allowed_names = {component}
-    pact_component_id = str(env.get("AGENT_SAFE_PACT_COMPONENT_ID", "") or "").strip()
+    pact_component_id = _env_value(env, "PACT_AGENT_COMPONENT_ID", "AGENT_SAFE_PACT_COMPONENT_ID").strip()
     if pact_component_id:
         allowed_names.add(pact_component_id)
     if parts[-1] not in allowed_names:
         violations.append(
             violation(
-                "AGENT_SAFE_PACT_PROJECT",
-                "Pact project directory name must match AGENT_SAFE_COMPONENT or AGENT_SAFE_PACT_COMPONENT_ID",
+                "PACT_AGENT_PROJECT",
+                "Pact project directory name must match PACT_AGENT_COMPONENT or PACT_AGENT_COMPONENT_ID",
             )
         )
     return project
@@ -323,29 +337,29 @@ def _validate_source_roots(
 
 
 def _validate_repair_allowed_context(env: Mapping[str, str], violations: list[dict[str, str]]) -> dict[str, object]:
-    raw = str(env.get("AGENT_SAFE_REPAIR_AGENT_ALLOWED_CONTEXT", "") or "").strip()
+    raw = _env_value(env, "PACT_AGENT_ALLOWED_CONTEXT", "AGENT_SAFE_REPAIR_AGENT_ALLOWED_CONTEXT").strip()
     if not raw:
-        violations.append(violation("AGENT_SAFE_REPAIR_AGENT_ALLOWED_CONTEXT", "repair allowed context is required"))
+        violations.append(violation("PACT_AGENT_ALLOWED_CONTEXT", "repair allowed context is required"))
         return {}
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as error:
-        violations.append(violation("AGENT_SAFE_REPAIR_AGENT_ALLOWED_CONTEXT", f"repair allowed context must be JSON: {error}"))
+        violations.append(violation("PACT_AGENT_ALLOWED_CONTEXT", f"repair allowed context must be JSON: {error}"))
         return {}
     if not isinstance(payload, dict):
-        violations.append(violation("AGENT_SAFE_REPAIR_AGENT_ALLOWED_CONTEXT", "repair allowed context must be a JSON object"))
+        violations.append(violation("PACT_AGENT_ALLOWED_CONTEXT", "repair allowed context must be a JSON object"))
         return {}
     return payload
 
 
 def _validate_repair_forbidden_writes(env: Mapping[str, str], violations: list[dict[str, str]]) -> list[str]:
-    raw = str(env.get("AGENT_SAFE_REPAIR_AGENT_FORBIDDEN_WRITES", "") or "")
+    raw = _env_value(env, "PACT_AGENT_FORBIDDEN_WRITES", "AGENT_SAFE_REPAIR_AGENT_FORBIDDEN_WRITES")
     values = {item.strip() for item in raw.split(",") if item.strip()}
     missing = sorted(FORBIDDEN_REPAIR_FORBIDDEN_WRITES - values)
     if missing:
         violations.append(
             violation(
-                "AGENT_SAFE_REPAIR_AGENT_FORBIDDEN_WRITES",
+                "PACT_AGENT_FORBIDDEN_WRITES",
                 f"repair forbidden writes must include: {', '.join(missing)}",
             )
         )
@@ -371,9 +385,14 @@ def _path_has_existing_symlink_component(cwd: Path, relative: str) -> bool:
 
 
 def _resolve_openai_model(env: Mapping[str, str]) -> str:
-    return str(
-        env.get("AGENT_SAFE_OPENAI_MODEL")
-        or env.get("AGENT_SAFE_AGENT_MODEL")
+    return (
+        _env_value(
+            env,
+            "PACT_AGENT_OPENAI_MODEL",
+            "PACT_AGENT_MODEL",
+            "AGENT_SAFE_OPENAI_MODEL",
+            "AGENT_SAFE_AGENT_MODEL",
+        )
         or DEFAULT_OPENAI_MODEL
     ).strip()
 
@@ -408,13 +427,13 @@ def _plan_openai_request(
 ) -> OpenAIRequestPlan | None:
     model = _resolve_openai_model(env)
     if not model:
-        violations.append(violation("AGENT_SAFE_OPENAI_MODEL", "OpenAI model is required"))
+        violations.append(violation("PACT_AGENT_OPENAI_MODEL", "OpenAI model is required"))
         return None
     pricing = _pricing_for_model_strict(model)
     if pricing is None:
         violations.append(
             violation(
-                "AGENT_SAFE_OPENAI_MODEL",
+                "PACT_AGENT_OPENAI_MODEL",
                 f"OpenAI model {model!r} has no configured pricing; refusing to run spend-capped agent",
             )
         )
@@ -426,15 +445,15 @@ def _plan_openai_request(
     if input_token_bound >= max_model_tokens:
         violations.append(
             violation(
-                "AGENT_SAFE_AGENT_MAX_MODEL_TOKENS",
-                "bounded input context exhausts AGENT_SAFE_AGENT_MAX_MODEL_TOKENS",
+                "PACT_AGENT_MAX_MODEL_TOKENS",
+                "bounded input context exhausts PACT_AGENT_MAX_MODEL_TOKENS",
             )
         )
         return None
 
     input_cost, output_cost = pricing
     if output_cost <= 0:
-        violations.append(violation("AGENT_SAFE_OPENAI_MODEL", "OpenAI model output pricing must be > 0"))
+        violations.append(violation("PACT_AGENT_OPENAI_MODEL", "OpenAI model output pricing must be > 0"))
         return None
 
     max_by_tokens = max_model_tokens - input_token_bound
@@ -446,8 +465,8 @@ def _plan_openai_request(
     if max_output_tokens < MIN_OUTPUT_TOKENS:
         violations.append(
             violation(
-                "AGENT_SAFE_AGENT_MAX_USD",
-                "bounded input context plus minimum output cannot fit inside AGENT_SAFE_AGENT_MAX_USD",
+                "PACT_AGENT_MAX_USD",
+                "bounded input context plus minimum output cannot fit inside PACT_AGENT_MAX_USD",
             )
         )
         return None
@@ -608,17 +627,17 @@ def _build_agent_payload(
 def _system_instructions(mode: str) -> str:
     if mode == "spec-author":
         return (
-            "You are the Pact BURN-E spec-author agent. You receive only a bounded "
+            "You are the Pact constrained spec-author agent. You receive only a bounded "
             "file snapshot. Return a JSON object that either blocks with a short "
             "reason or provides full UTF-8 file contents for files to write. Do not "
             "request or assume broader repository context. Do not modify source code."
         )
     return (
-        "You are the Pact BURN-E repair agent. You receive only a bounded file "
+        "You are the Pact constrained repair agent. You receive only a bounded file "
         "snapshot and allowed context. Return a JSON object that either blocks with "
         "a short reason or provides full UTF-8 file contents for implementation files "
-        "to write. Do not edit contracts, tests, workflows, control-plane files, "
-        "hidden-oracle files, or agent-safe files."
+        "to write. Do not edit contracts, tests, workflows, hidden test material, "
+        "or control-plane files."
     )
 
 
@@ -811,7 +830,7 @@ def run_openai_agent_once(
 
     api_key = str(env.get("OPENAI_API_KEY", "") or "").strip()
     if not api_key:
-        violations.append(violation("OPENAI_API_KEY", "OPENAI_API_KEY is required for BURN-E OpenAI API agents"))
+        violations.append(violation("OPENAI_API_KEY", "OPENAI_API_KEY is required for constrained OpenAI API agents"))
         return request_plan, None
 
     request_payload: dict[str, object] = {
@@ -825,7 +844,7 @@ def run_openai_agent_once(
         "text": {
             "format": {
                 "type": "json_schema",
-                "name": "burne_file_changes",
+                "name": "agent_file_changes",
                 "strict": True,
                 "schema": response_schema,
             },
@@ -874,9 +893,9 @@ def run_openai_agent_once(
         output_tokens=output_tokens,
     )
     if input_tokens + output_tokens > int(caps.get("max_model_tokens") or 0):
-        violations.append(violation("budget", "OpenAI response exceeded AGENT_SAFE_AGENT_MAX_MODEL_TOKENS"))
+        violations.append(violation("budget", "OpenAI response exceeded PACT_AGENT_MAX_MODEL_TOKENS"))
     if estimated_cost > int(caps.get("max_usd_cents") or 0) / 100:
-        violations.append(violation("budget", "OpenAI response exceeded AGENT_SAFE_AGENT_MAX_USD"))
+        violations.append(violation("budget", "OpenAI response exceeded PACT_AGENT_MAX_USD"))
 
     response_rejection = _openai_response_rejection(response_payload)
     if response_rejection is not None:
@@ -985,7 +1004,7 @@ def _emit_report(report: Mapping[str, object], output_path: Path | None) -> None
     output_path.write_text(text, encoding="utf-8")
 
 
-def _run_burne_agent(
+def _run_constrained_agent(
     *,
     mode: str,
     args: Any,
@@ -1005,9 +1024,9 @@ def _run_burne_agent(
     if mode == "spec-author":
         if getattr(args, "source_root", None):
             violations.append(violation("source-root", "spec-author does not accept --source-root"))
-        role = str(env.get("AGENT_SAFE_SPEC_AGENT_ROLE", "") or "").strip()
-        if role and role != "spec-agent":
-            violations.append(violation("AGENT_SAFE_SPEC_AGENT_ROLE", "spec author role must be spec-agent"))
+        role = _env_value(env, "PACT_AGENT_ROLE", "AGENT_SAFE_SPEC_AGENT_ROLE").strip()
+        if role and role not in {"spec-author", "spec-agent"}:
+            violations.append(violation("PACT_AGENT_ROLE", "spec author role must be spec-author"))
     else:
         source_roots = _validate_source_roots(
             list(getattr(args, "source_root", []) or []),
@@ -1110,9 +1129,9 @@ def _run_burne_agent(
     return result.exit_code or 1
 
 
-def run_burne_spec_author(args: Any, env: Mapping[str, str] | None = None) -> int:
-    return _run_burne_agent(mode="spec-author", args=args, env=env)
+def run_agent_spec_author(args: Any, env: Mapping[str, str] | None = None) -> int:
+    return _run_constrained_agent(mode="spec-author", args=args, env=env)
 
 
-def run_burne_repair(args: Any, env: Mapping[str, str] | None = None) -> int:
-    return _run_burne_agent(mode="repair", args=args, env=env)
+def run_agent_repair(args: Any, env: Mapping[str, str] | None = None) -> int:
+    return _run_constrained_agent(mode="repair", args=args, env=env)
