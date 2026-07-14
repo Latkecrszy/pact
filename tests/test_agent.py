@@ -219,6 +219,7 @@ def test_repair_openai_request_is_bounded_and_applies_allowed_changes(
     assert report["agent"]["provider"] == "openai-responses-api"
     assert report["agent"]["model"] == "gpt-4o-mini"
     assert report["agent"]["request"]["max_output_tokens"] == request["max_output_tokens"]
+    assert report["agent"]["request"]["model_call_bound"] == 1
     assert request["max_output_tokens"] <= 5000
     assert request["max_tool_calls"] == 10
     assert request["store"] is False
@@ -228,6 +229,7 @@ def test_repair_openai_request_is_bounded_and_applies_allowed_changes(
     assert "services/api/handler.py" in included_paths
     assert "pact/api/contracts/contract.json" in included_paths
     assert (tmp_path / "services" / "api" / "handler.py").read_text(encoding="utf-8") == new_handler
+    assert report["agent"]["usage"]["model_calls"] == 1
     assert report["agent"]["applied_paths"] == ["services/api/handler.py"]
 
 
@@ -247,6 +249,68 @@ def test_missing_openai_key_fails_before_request(tmp_path: Path, monkeypatch: py
     assert report["status"] == "policy-failed"
     assert any(item["name"] == "OPENAI_API_KEY" for item in report["policy"]["violations"])
     post.assert_not_called()
+
+
+def test_openai_request_is_not_sent_when_usd_cap_cannot_cover_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "services" / "api" / "large-context.py").write_text("x" * 12_000, encoding="utf-8")
+    output = tmp_path / "cap-report.json"
+
+    with patch("pact.agent._post_openai_response") as post:
+        result = agent.run_agent_repair(
+            _args(source_root=["services/api"], output="cap-report.json"),
+            env=_env(
+                PACT_AGENT_OPENAI_MODEL="gpt-4o",
+                PACT_AGENT_MAX_MODEL_TOKENS="50000",
+                PACT_AGENT_MAX_USD="0.01",
+            ),
+        )
+
+    report = _load_report(output)
+    assert result == 2
+    assert report["status"] == "policy-failed"
+    assert any(item["name"] == "PACT_AGENT_MAX_USD" for item in report["policy"]["violations"])
+    post.assert_not_called()
+
+
+def test_openai_response_usage_over_cap_blocks_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "over-budget-report.json"
+    handler = tmp_path / "services" / "api" / "handler.py"
+    original_handler = handler.read_text(encoding="utf-8")
+
+    with patch(
+        "pact.agent._post_openai_response",
+        return_value=_response(
+            {
+                "status": "changed",
+                "summary": "try write",
+                "changes": [{"path": "services/api/handler.py", "content": "owned\n"}],
+            },
+            input_tokens=5_000,
+            output_tokens=100,
+        ),
+    ):
+        result = agent.run_agent_repair(
+            _args(source_root=["services/api"], output="over-budget-report.json"),
+            env=_env(),
+        )
+
+    report = _load_report(output)
+    assert result == 1
+    assert report["accepted"] is False
+    assert report["status"] == "failed"
+    assert handler.read_text(encoding="utf-8") == original_handler
+    assert report["agent"]["usage"]["model_calls"] == 1
+    assert any(item["name"] == "budget" for item in report["policy"]["violations"])
 
 
 def test_openai_timeout_returns_failed_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

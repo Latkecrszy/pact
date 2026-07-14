@@ -89,6 +89,7 @@ class AgentResult:
     output: str
     elapsed_seconds: float
     response_id: str
+    model_calls: int
     input_tokens: int
     output_tokens: int
     estimated_cost_usd: float
@@ -106,6 +107,7 @@ class ContextFile:
 @dataclass(frozen=True)
 class OpenAIRequestPlan:
     model: str
+    model_call_bound: int
     input_token_bound: int
     max_output_tokens: int
     estimated_max_cost_usd: float
@@ -441,7 +443,16 @@ def _plan_openai_request(
 
     input_token_bound = len(input_text.encode("utf-8"))
     max_model_tokens = int(caps.get("max_model_tokens") or 0)
+    max_tool_calls = int(caps.get("max_tool_calls") or 0)
     max_usd_cents = int(caps.get("max_usd_cents") or 0)
+    if max_tool_calls < 1:
+        violations.append(
+            violation(
+                "PACT_AGENT_MAX_TOOL_CALLS",
+                "PACT_AGENT_MAX_TOOL_CALLS must allow at least one bounded OpenAI model call",
+            )
+        )
+        return None
     if input_token_bound >= max_model_tokens:
         violations.append(
             violation(
@@ -473,6 +484,7 @@ def _plan_openai_request(
 
     return OpenAIRequestPlan(
         model=model,
+        model_call_bound=1,
         input_token_bound=input_token_bound,
         max_output_tokens=max_output_tokens,
         estimated_max_cost_usd=_bounded_token_cost(
@@ -866,6 +878,7 @@ def run_openai_agent_once(
             output="",
             elapsed_seconds=elapsed,
             response_id="",
+            model_calls=1,
             input_tokens=0,
             output_tokens=0,
             estimated_cost_usd=0.0,
@@ -879,6 +892,7 @@ def run_openai_agent_once(
             output=_short_text(error),
             elapsed_seconds=elapsed,
             response_id="",
+            model_calls=1,
             input_tokens=0,
             output_tokens=0,
             estimated_cost_usd=0.0,
@@ -906,6 +920,7 @@ def run_openai_agent_once(
             output=_short_text(response_rejection),
             elapsed_seconds=elapsed,
             response_id=str(response_payload.get("id", "") or ""),
+            model_calls=1,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             estimated_cost_usd=estimated_cost,
@@ -923,6 +938,7 @@ def run_openai_agent_once(
             output=_short_text(response_text),
             elapsed_seconds=elapsed,
             response_id=str(response_payload.get("id", "") or ""),
+            model_calls=1,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             estimated_cost_usd=estimated_cost,
@@ -942,6 +958,7 @@ def run_openai_agent_once(
         output=_short_text(summary or response_text),
         elapsed_seconds=elapsed,
         response_id=str(response_payload.get("id", "") or ""),
+        model_calls=1,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         estimated_cost_usd=estimated_cost,
@@ -974,6 +991,7 @@ def _base_report(mode: str, cwd: Path, caps: Mapping[str, object], component: st
             "model": "",
             "request": {
                 "endpoint": "POST /v1/responses",
+                "model_call_bound": 0,
                 "max_output_tokens": 0,
                 "max_tool_calls": 0,
                 "input_token_bound": 0,
@@ -988,6 +1006,7 @@ def _base_report(mode: str, cwd: Path, caps: Mapping[str, object], component: st
             "usage": {
                 "input_tokens": 0,
                 "output_tokens": 0,
+                "model_calls": 0,
                 "estimated_cost_usd": 0.0,
             },
             "applied_paths": [],
@@ -1077,6 +1096,7 @@ def _run_constrained_agent(
         report["agent"]["model"] = request_plan.model
         report["agent"]["request"] = {
             "endpoint": "POST /v1/responses",
+            "model_call_bound": request_plan.model_call_bound,
             "max_output_tokens": request_plan.max_output_tokens,
             "max_tool_calls": int(caps.get("max_tool_calls") or 0),
             "input_token_bound": request_plan.input_token_bound,
@@ -1097,6 +1117,7 @@ def _run_constrained_agent(
         "usage": {
             "input_tokens": result.input_tokens,
             "output_tokens": result.output_tokens,
+            "model_calls": result.model_calls,
             "estimated_cost_usd": round(result.estimated_cost_usd, 6),
         },
         "applied_paths": list(result.applied_paths),
