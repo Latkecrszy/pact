@@ -50,13 +50,6 @@ CAP_ENV = {
     "max_usd": "PACT_AGENT_MAX_USD",
 }
 
-CAP_ENV_ALIASES = {
-    "PACT_AGENT_MAX_WALL_SECONDS": ("AGENT_SAFE_AGENT_MAX_WALL_SECONDS",),
-    "PACT_AGENT_MAX_MODEL_TOKENS": ("AGENT_SAFE_AGENT_MAX_MODEL_TOKENS",),
-    "PACT_AGENT_MAX_TOOL_CALLS": ("AGENT_SAFE_AGENT_MAX_TOOL_CALLS",),
-    "PACT_AGENT_MAX_USD": ("AGENT_SAFE_AGENT_MAX_USD",),
-}
-
 FORBIDDEN_REPAIR_FORBIDDEN_WRITES = {
     "contracts",
     "visible-tests",
@@ -138,7 +131,7 @@ def _parse_positive_int_cap(
     maximum: int,
     violations: list[dict[str, str]],
 ) -> int:
-    raw = _env_value(env, key, *CAP_ENV_ALIASES.get(key, ())).strip()
+    raw = _env_value(env, key).strip()
     if not raw:
         violations.append(violation(key, f"{key} is required"))
         return 0
@@ -153,7 +146,7 @@ def _parse_positive_int_cap(
 
 def _parse_usd_cap(env: Mapping[str, str], violations: list[dict[str, str]]) -> tuple[int, str]:
     key = CAP_ENV["max_usd"]
-    raw = _env_value(env, key, *CAP_ENV_ALIASES.get(key, ())).strip()
+    raw = _env_value(env, key).strip()
     if not raw:
         violations.append(violation(key, f"{key} is required"))
         return 0, "0.00"
@@ -238,7 +231,7 @@ def _clean_relative_path(
 
 
 def _validate_component(env: Mapping[str, str], violations: list[dict[str, str]]) -> str:
-    component = _env_value(env, "PACT_AGENT_COMPONENT", "AGENT_SAFE_COMPONENT").strip()
+    component = _env_value(env, "PACT_AGENT_COMPONENT").strip()
     if not component:
         violations.append(violation("PACT_AGENT_COMPONENT", "PACT_AGENT_COMPONENT is required"))
     elif not COMPONENT_RE.fullmatch(component):
@@ -253,7 +246,7 @@ def _validate_pact_project(
     violations: list[dict[str, str]],
 ) -> ResolvedPath | None:
     project = _clean_relative_path(
-        _env_value(env, "PACT_AGENT_PROJECT", "AGENT_SAFE_PACT_PROJECT"),
+        _env_value(env, "PACT_AGENT_PROJECT"),
         field_name="PACT_AGENT_PROJECT",
         cwd=cwd,
         violations=violations,
@@ -267,7 +260,7 @@ def _validate_pact_project(
     if len(parts) < 2:
         violations.append(violation("PACT_AGENT_PROJECT", "Pact project must be component-scoped, not a top-level root"))
     allowed_names = {component}
-    pact_component_id = _env_value(env, "PACT_AGENT_COMPONENT_ID", "AGENT_SAFE_PACT_COMPONENT_ID").strip()
+    pact_component_id = _env_value(env, "PACT_AGENT_COMPONENT_ID").strip()
     if pact_component_id:
         allowed_names.add(pact_component_id)
     if parts[-1] not in allowed_names:
@@ -339,7 +332,7 @@ def _validate_source_roots(
 
 
 def _validate_repair_allowed_context(env: Mapping[str, str], violations: list[dict[str, str]]) -> dict[str, object]:
-    raw = _env_value(env, "PACT_AGENT_ALLOWED_CONTEXT", "AGENT_SAFE_REPAIR_AGENT_ALLOWED_CONTEXT").strip()
+    raw = _env_value(env, "PACT_AGENT_ALLOWED_CONTEXT").strip()
     if not raw:
         violations.append(violation("PACT_AGENT_ALLOWED_CONTEXT", "repair allowed context is required"))
         return {}
@@ -355,7 +348,7 @@ def _validate_repair_allowed_context(env: Mapping[str, str], violations: list[di
 
 
 def _validate_repair_forbidden_writes(env: Mapping[str, str], violations: list[dict[str, str]]) -> list[str]:
-    raw = _env_value(env, "PACT_AGENT_FORBIDDEN_WRITES", "AGENT_SAFE_REPAIR_AGENT_FORBIDDEN_WRITES")
+    raw = _env_value(env, "PACT_AGENT_FORBIDDEN_WRITES")
     values = {item.strip() for item in raw.split(",") if item.strip()}
     missing = sorted(FORBIDDEN_REPAIR_FORBIDDEN_WRITES - values)
     if missing:
@@ -392,8 +385,6 @@ def _resolve_openai_model(env: Mapping[str, str]) -> str:
             env,
             "PACT_AGENT_OPENAI_MODEL",
             "PACT_AGENT_MODEL",
-            "AGENT_SAFE_OPENAI_MODEL",
-            "AGENT_SAFE_AGENT_MODEL",
         )
         or DEFAULT_OPENAI_MODEL
     ).strip()
@@ -1043,7 +1034,7 @@ def _run_constrained_agent(
     if mode == "spec-author":
         if getattr(args, "source_root", None):
             violations.append(violation("source-root", "spec-author does not accept --source-root"))
-        role = _env_value(env, "PACT_AGENT_ROLE", "AGENT_SAFE_SPEC_AGENT_ROLE").strip()
+        role = _env_value(env, "PACT_AGENT_ROLE").strip()
         if role and role not in {"spec-author", "spec-agent"}:
             violations.append(violation("PACT_AGENT_ROLE", "spec author role must be spec-author"))
     else:

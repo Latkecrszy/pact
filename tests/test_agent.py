@@ -105,11 +105,11 @@ def test_spec_author_fails_closed_without_required_env(tmp_path: Path, monkeypat
     assert result == 2
 
 
-def test_legacy_agent_safe_env_names_remain_accepted_as_aliases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_agent_safe_env_names_are_not_accepted_as_aliases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "report.json"
-    legacy_env = {
+    agent_safe_env = {
         "AGENT_SAFE_AGENT_MAX_WALL_SECONDS": "30",
         "AGENT_SAFE_AGENT_MAX_MODEL_TOKENS": "5000",
         "AGENT_SAFE_AGENT_MAX_TOOL_CALLS": "10",
@@ -120,15 +120,17 @@ def test_legacy_agent_safe_env_names_remain_accepted_as_aliases(tmp_path: Path, 
         "AGENT_SAFE_SPEC_AGENT_ROLE": "spec-agent",
     }
 
-    result = agent.run_agent_spec_author(_args(output="report.json"), env=legacy_env)
+    result = agent.run_agent_spec_author(_args(output="report.json"), env=agent_safe_env)
 
     report = _load_report(output)
     assert result == 2
     violation_names = {item["name"] for item in report["policy"]["violations"]}
-    assert "OPENAI_API_KEY" in violation_names
-    assert "PACT_AGENT_COMPONENT" not in violation_names
-    assert "PACT_AGENT_PROJECT" not in violation_names
-    assert "PACT_AGENT_MAX_USD" not in violation_names
+    assert "PACT_AGENT_COMPONENT" in violation_names
+    assert "PACT_AGENT_PROJECT" in violation_names
+    assert "PACT_AGENT_MAX_USD" in violation_names
+    assert "PACT_AGENT_MAX_WALL_SECONDS" in violation_names
+    assert "PACT_AGENT_MAX_MODEL_TOKENS" in violation_names
+    assert "PACT_AGENT_MAX_TOOL_CALLS" in violation_names
 
 
 def test_caps_reject_values_above_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
